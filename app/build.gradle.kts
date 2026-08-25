@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.siddu.offlinedocai"
-        minSdk = 21
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -56,7 +56,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 
     // PDF & DOCX parsing (Android compatible)
-    implementation("com.tom_roush:pdfbox-android:2.0.27.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("org.apache.poi:poi-ooxml:5.2.3")
 
     // Debug tooling

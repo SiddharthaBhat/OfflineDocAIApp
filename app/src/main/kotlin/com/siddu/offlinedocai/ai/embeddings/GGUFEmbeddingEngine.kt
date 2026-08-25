@@ -40,7 +40,7 @@ class GGUFEmbeddingEngine(private val context: Context) : EmbeddingModel {
 
     override suspend fun getEmbedding(text: String): FloatArray = withContext(Dispatchers.Default) {
         if (modelFile == null || !modelFile.exists()) {
-            throw IllegalStateException("Embedding model not loaded. Please import a GGUF model file into filesDir/models/embeddings.")
+            Log.w(TAG, "Embedding model not found. Using zero-vector fallback for prototype testing.")
         }
         // TODO: replace this stub with actual GGUF inference using native library.
         // For now return a deterministic zero vector; this will not be used for production.

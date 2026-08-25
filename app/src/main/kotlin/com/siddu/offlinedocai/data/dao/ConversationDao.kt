@@ -17,4 +17,7 @@ interface ConversationDao {
 
     @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): ConversationEntity?
+
+    @androidx.room.Delete
+    suspend fun delete(conversation: ConversationEntity)
 }

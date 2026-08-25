@@ -1,6 +1,7 @@
 package com.siddu.offlinedocai
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
@@ -8,9 +9,17 @@ import com.siddu.offlinedocai.data.AppDatabase
 import com.siddu.offlinedocai.data.entities.DocumentEntity
 import com.siddu.offlinedocai.data.entities.ConversationEntity
 import com.siddu.offlinedocai.data.entities.MessageEntity
+import com.siddu.offlinedocai.domain.repository.DocumentRepository
+import com.siddu.offlinedocai.domain.repository.ChatRepository
+import com.siddu.offlinedocai.domain.repository.ModelDownloader
+import com.siddu.offlinedocai.domain.repository.DownloadState
+import com.siddu.offlinedocai.ai.retrieval.VectorStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * Central ViewModel for the OfflineDocAI app.
@@ -33,6 +42,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _conversations = MutableStateFlow<List<ConversationEntity>>(emptyList())
     val conversations: StateFlow<List<ConversationEntity>> = _conversations
 
+    val isEmbeddingModelDownloaded = MutableStateFlow(false)
+    val isLlmModelDownloaded = MutableStateFlow(false)
+
+    private val embeddingDownloader = ModelDownloader(application)
+    val embeddingDownloadState: StateFlow<DownloadState> = embeddingDownloader.downloadState
+
+    private val llmDownloader = ModelDownloader(application)
+    val llmDownloadState: StateFlow<DownloadState> = llmDownloader.downloadState
+
     init {
         // Load existing data from DB
         viewModelScope.launch {
@@ -41,15 +59,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             conversationDao.getAllConversations().collect { _conversations.value = it }
         }
+        checkModels()
+        autoDownloadEmbeddingIfMissing()
     }
 
-    /** Insert a new processed document into the DB. */
+    fun checkModels() {
+        val embedDir = File(getApplication<Application>().filesDir, "models/embeddings")
+        val hasEmbed = embedDir.listFiles()?.any { it.extension.equals("gguf", ignoreCase = true) } == true
+        isEmbeddingModelDownloaded.value = hasEmbed
+
+        val llmDir = File(getApplication<Application>().filesDir, "models/llm")
+        val hasLlm = llmDir.listFiles()?.any { it.extension.equals("gguf", ignoreCase = true) } == true
+        isLlmModelDownloaded.value = hasLlm
+    }
+
+    private fun autoDownloadEmbeddingIfMissing() {
+        if (!isEmbeddingModelDownloaded.value) {
+            downloadEmbeddingModel()
+        }
+    }
+
+    fun downloadEmbeddingModel() {
+        val destFile = File(getApplication<Application>().filesDir, "models/embeddings/all-MiniLM-L6-v2.Q4_K_M.gguf")
+        viewModelScope.launch {
+            embeddingDownloader.downloadModel(
+                "https://huggingface.co/leliuga/all-MiniLM-L6-v2-GGUF/resolve/main/all-MiniLM-L6-v2.Q4_K_M.gguf",
+                destFile
+            )
+            checkModels()
+        }
+    }
+
+    fun downloadLlmModel(urlStr: String, fileName: String) {
+        val destFile = File(getApplication<Application>().filesDir, "models/llm/$fileName")
+        viewModelScope.launch {
+            llmDownloader.downloadModel(urlStr, destFile)
+            checkModels()
+        }
+    }
+
+    fun resetLlmDownloadState() {
+        llmDownloader.resetState()
+    }
+
+    fun resetEmbeddingDownloadState() {
+        embeddingDownloader.resetState()
+    }
+
     // Repositories
     private val documentRepository = DocumentRepository(application, database)
     private val vectorStore = VectorStore(database.chunkDao())
     private val chatRepository = ChatRepository(application, database, vectorStore)
 
     val importState: StateFlow<DocumentRepository.ImportState> = documentRepository.importState
+    val chatState: StateFlow<ChatRepository.ChatState> = chatRepository.chatState
 
     /** Trigger document import */
     fun importDocument(uri: Uri) {
@@ -57,8 +120,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Start a new conversation linked to selected document IDs */
-    fun startConversation(title: String = "New Chat", documentIds: List<Long> = emptyList()): Long {
-        return chatRepository.startConversation(title)
+    suspend fun startConversation(title: String = "New Chat", documentIds: List<Long> = emptyList()): Long {
+        return chatRepository.startConversation(title, documentIds.firstOrNull())
     }
 
     /** Send a message in a conversation */
@@ -66,50 +129,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         chatRepository.sendMessage(convId, text, docIds)
     }
 
-    val chatState: StateFlow<ChatRepository.ChatState> = chatRepository.chatState
-        viewModelScope.launch {
-            val doc = DocumentEntity(
-                uri = uri,
-                name = name,
-                type = type,
-                pageCount = pageCount,
-                status = "COMPLETED"
-            )
-            documentDao.insert(doc)
-        }
-    }
-
-    /** Create a new conversation, optionally linked to a document. */
-    fun startConversation(title: String, documentId: Long? = null) {
-        viewModelScope.launch {
-            val conv = ConversationEntity(
-                title = title,
-                documentId = documentId
-            )
-            conversationDao.insert(conv)
-        }
-    }
-
-    /** Persist a chat message. */
     // Delete a document
     fun deleteDocument(documentId: Long) {
         viewModelScope.launch {
-            documentDao.delete(documentDao.getById(documentId)!!)
+            documentDao.getById(documentId)?.let {
+                documentDao.delete(it)
+            }
+        }
+    }
+
+    // Delete a conversation and its messages
+    fun deleteConversation(convId: Long) {
+        viewModelScope.launch {
+            conversationDao.getById(convId)?.let {
+                conversationDao.delete(it)
+            }
+            messageDao.deleteMessagesForConversation(convId)
         }
     }
 
     // Get messages for a conversation as StateFlow
     fun messagesForConversation(convId: Long): StateFlow<List<MessageEntity>> {
         return messageDao.getMessagesForConversation(convId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    }
-        viewModelScope.launch {
-            val msg = MessageEntity(
-                conversationId = conversationId,
-                role = role,
-                content = content,
-                sources = sources
-            )
-            messageDao.insert(msg)
-        }
     }
 }

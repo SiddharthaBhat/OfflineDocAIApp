@@ -39,26 +39,51 @@ class DocumentRepository(
     private val documentDao = db.documentDao()
     private val embeddingEngine: EmbeddingModel = GGUFEmbeddingEngine(context)
 
+    private fun getFileName(uri: Uri): String {
+        var name = ""
+        if (uri.scheme == "content") {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val index = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) {
+                        name = it.getString(index)
+                    }
+                }
+            }
+        }
+        if (name.isEmpty()) {
+            name = uri.lastPathSegment ?: "unknown_document"
+        }
+        return name
+    }
+
     /** Public API to start an import */
     fun importDocument(uri: Uri) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 _importState.value = ImportState.Reading
                 val result = DocumentProcessor.extractDocument(context, uri)
+                
+                val fileName = getFileName(uri)
+                val type = context.contentResolver.getType(uri) ?: fileName.substringAfterLast('.', "")
+
                 // Insert DocumentEntity
                 val document = DocumentEntity(
                     id = 0, // auto‑generated
-                    name = result.fileName,
+                    name = fileName,
                     uri = uri.toString(),
+                    type = type,
                     pageCount = result.pageCount,
-                    importedAt = System.currentTimeMillis()
+                    addedAt = System.currentTimeMillis(),
+                    status = "PROCESSING"
                 )
                 val docId = documentDao.insert(document)
 
                 _importState.value = ImportState.Chunking
                 val allChunks = mutableListOf<ChunkEntity>()
                 result.pages.forEachIndexed { pageIdx, pageText ->
-                    val chunks = TextChunker.chunkText(pageText, pageNumber = pageIdx + 1)
+                    val chunks = TextChunker.chunkText(pageText.text, pageNumber = pageIdx + 1)
                     chunks.forEach { chunk ->
                         allChunks.add(
                             ChunkEntity(
@@ -83,8 +108,12 @@ class DocumentRepository(
 
                 _importState.value = ImportState.Saving
                 chunkDao.insertAll(allChunks)
+                
+                // Update document to completed
+                documentDao.update(document.copy(id = docId, status = "COMPLETED"))
+                
                 _importState.value = ImportState.Completed
-            } catch (e: Exception) {
+            } catch (e: java.lang.Exception) {
                 Log.e(TAG, "Import failed", e)
                 _importState.value = ImportState.Error(e.message ?: "Unknown error")
             }
