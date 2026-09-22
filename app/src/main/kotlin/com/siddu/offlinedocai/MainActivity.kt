@@ -46,6 +46,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
+        } catch (_: Exception) {}
         setContent { OfflineDocAIApp() }
     }
 }
@@ -678,8 +681,60 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text(msg.content)
                                 if (!msg.sources.isNullOrBlank()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text("Sources: pages ${msg.sources}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    val chunksList = remember(msg.sources) {
+                                        msg.sources.split("|||").filter { it.isNotBlank() }
+                                    }
+                                    if (chunksList.isNotEmpty()) {
+                                        var expanded by remember { mutableStateOf(false) }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Divider(color = Color.LightGray.copy(alpha = 0.5f))
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { expanded = !expanded }
+                                                .padding(vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = if (expanded) "▼ Hide Retained Chunks (${chunksList.size})" else "▶ View Extracted Context Chunks (${chunksList.size})",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        if (expanded) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 4.dp),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                chunksList.forEachIndexed { idx, chunk ->
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = MaterialTheme.colorScheme.background,
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Column(modifier = Modifier.padding(8.dp)) {
+                                                            Text(
+                                                                text = "Chunk #${idx + 1}",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.secondary
+                                                            )
+                                                            Spacer(modifier = Modifier.height(2.dp))
+                                                            Text(
+                                                                text = chunk,
+                                                                style = MaterialTheme.typography.bodySmall
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -728,35 +783,104 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
 fun SettingsScreen(viewModel: MainViewModel) {
     val isEmbedDownloaded by viewModel.isEmbeddingModelDownloaded.collectAsState()
     val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
+    val downloadedLlmModels by viewModel.downloadedLlmModels.collectAsState()
+    val selectedLlmModel by viewModel.selectedLlmModel.collectAsState()
+    val llmDownloadState by viewModel.llmDownloadState.collectAsState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp)
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("Settings & Model Management", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(24.dp))
-        Text("Model Statuses:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(modifier = Modifier.height(12.dp))
-
+        
+        Text("Embedding Model:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Embedding Model:")
-                    Text(if (isEmbedDownloaded) "Downloaded" else "Missing", color = if (isEmbedDownloaded) Color(0xFF4CAF50) else Color.Red)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("LLM Model (SLM):")
-                    Text(if (isLlmDownloaded) "Downloaded" else "Missing", color = if (isLlmDownloaded) Color(0xFF4CAF50) else Color.Red)
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("all-MiniLM-L6-v2 (Embedding)")
+                Text(if (isEmbedDownloaded) "Ready" else "Downloading...", color = if (isEmbedDownloaded) Color(0xFF4CAF50) else Color(0xFFFF9800))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Downloaded Local Language Models (SLMs):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (downloadedLlmModels.isEmpty()) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Text("No SLM models downloaded yet. Download one below.", modifier = Modifier.padding(16.dp), color = Color.Gray)
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                downloadedLlmModels.forEach { file ->
+                    val isSelected = selectedLlmModel?.name == file.name
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.selectLlmModel(file) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(file.name, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (isSelected) "Active for Chat" else "Tap to Select",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray
+                                )
+                            }
+                            IconButton(onClick = { viewModel.deleteLlmModel(file) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete Model", tint = Color.Red)
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Download Additional Models:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                viewModel.downloadLlmModel(
+                    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                    "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Download Qwen 2.5 0.5B (390 MB)")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                viewModel.downloadLlmModel(
+                    "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+                    "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Download Llama 3.2 1B (700 MB)")
         }
     }
 }

@@ -9,7 +9,7 @@
         android:label="OfflineDocAI"
         android:icon="@android:mipmap/sym_def_app_icon"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.OfflineDocAI">
         <activity android:name=".MainActivity"
             android:exported="true">
             <intent-filter>

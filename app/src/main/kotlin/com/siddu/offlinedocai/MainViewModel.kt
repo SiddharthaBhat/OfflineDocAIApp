@@ -51,6 +51,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val llmDownloader = ModelDownloader(application)
     val llmDownloadState: StateFlow<DownloadState> = llmDownloader.downloadState
 
+    val downloadedLlmModels = MutableStateFlow<List<File>>(emptyList())
+    val selectedLlmModel = MutableStateFlow<File?>(null)
+
+    // Repositories
+    private val documentRepository = DocumentRepository(application, database)
+    private val vectorStore = VectorStore(database.chunkDao())
+    private val chatRepository = ChatRepository(application, database, vectorStore)
+
+    val importState: StateFlow<DocumentRepository.ImportState> = documentRepository.importState
+    val chatState: StateFlow<ChatRepository.ChatState> = chatRepository.chatState
+
     init {
         // Load existing data from DB
         viewModelScope.launch {
@@ -69,8 +80,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isEmbeddingModelDownloaded.value = hasEmbed
 
         val llmDir = File(getApplication<Application>().filesDir, "models/llm")
-        val hasLlm = llmDir.listFiles()?.any { it.extension.equals("gguf", ignoreCase = true) } == true
-        isLlmModelDownloaded.value = hasLlm
+        val llmFiles = llmDir.listFiles()?.filter { it.extension.equals("gguf", ignoreCase = true) } ?: emptyList()
+        downloadedLlmModels.value = llmFiles
+        isLlmModelDownloaded.value = llmFiles.isNotEmpty()
+        if (selectedLlmModel.value == null || !selectedLlmModel.value!!.exists()) {
+            selectedLlmModel.value = llmFiles.firstOrNull()
+        }
+    }
+
+    fun selectLlmModel(file: File) {
+        selectedLlmModel.value = file
+    }
+
+    fun deleteLlmModel(file: File) {
+        viewModelScope.launch {
+            if (file.exists()) {
+                file.delete()
+            }
+            checkModels()
+        }
     }
 
     private fun autoDownloadEmbeddingIfMissing() {
@@ -105,14 +133,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resetEmbeddingDownloadState() {
         embeddingDownloader.resetState()
     }
-
-    // Repositories
-    private val documentRepository = DocumentRepository(application, database)
-    private val vectorStore = VectorStore(database.chunkDao())
-    private val chatRepository = ChatRepository(application, database, vectorStore)
-
-    val importState: StateFlow<DocumentRepository.ImportState> = documentRepository.importState
-    val chatState: StateFlow<ChatRepository.ChatState> = chatRepository.chatState
 
     /** Trigger document import */
     fun importDocument(uri: Uri) {

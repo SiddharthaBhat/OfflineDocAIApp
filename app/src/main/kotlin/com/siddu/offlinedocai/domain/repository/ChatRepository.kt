@@ -116,18 +116,22 @@ How may I help you today?
                 val cleanDocIds = relevantDocumentIds.filter { it > 0 }
 
                 // Build prompt based on whether valid documents are linked
-                val prompt = if (cleanDocIds.isEmpty()) {
-                    buildNormalPrompt(userText)
+                val (prompt, sourcesData) = if (cleanDocIds.isEmpty()) {
+                    Pair(buildNormalPrompt(userText), null)
                 } else {
                     // Embedding of the query
                     val queryEmbedding = embeddingEngine.getEmbedding(userText)
 
-                    // Retrieve relevant chunks (top‑5)
-                    val chunks = vectorStore.retrieve(queryEmbedding, cleanDocIds, topK = 5, query = userText)
+                    // Retrieve relevant chunks (top‑10)
+                    val chunks = vectorStore.retrieve(queryEmbedding, cleanDocIds, topK = 10, query = userText)
                     val contextText = chunks.joinToString("\n\n") { "[Page ${it.pageNumber}] ${it.text}" }
 
+                    // Format chunks as JSON-like/readable source blocks for UI dropdown
+                    val sourcesJson = chunks.joinToString("|||") { "Page ${it.pageNumber}: ${it.text}" }
+
                     // Build prompt
-                    buildPrompt(contextText, userText)
+                    val p = buildPrompt(contextText, userText)
+                    Pair(p, sourcesJson)
                 }
 
                 // Generate full answer from GGUFLLM
@@ -140,7 +144,8 @@ How may I help you today?
                         conversationId = conversationId,
                         role = "assistant",
                         content = "",
-                        timestamp = System.currentTimeMillis()
+                        timestamp = System.currentTimeMillis(),
+                        sources = sourcesData
                     )
                 )
 
@@ -155,7 +160,8 @@ How may I help you today?
                             conversationId = conversationId,
                             role = "assistant",
                             content = currentContent,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis(),
+                            sources = sourcesData
                         )
                     )
                     delay(40) // speed of stream
