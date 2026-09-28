@@ -21,6 +21,22 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -633,11 +649,14 @@ fun NewChatScreen(viewModel: MainViewModel, navController: NavHostController) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostController) {
+    val context = LocalContext.current
     val conversations by viewModel.conversations.collectAsState()
     val chat = conversations.find { it.id == convId }
     val messages by viewModel.messagesForConversation(convId).collectAsState()
     val chatState by viewModel.chatState.collectAsState()
+    val queueState by viewModel.questionQueueState.collectAsState()
     var textInput by remember { mutableStateOf("") }
+    var showQueueDialog by remember { mutableStateOf(false) }
 
     val linkedDocIds = chat?.documentId?.let { listOf(it) } ?: emptyList()
 
@@ -649,6 +668,32 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { showQueueDialog = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlaylistAdd,
+                            contentDescription = "Question Queue"
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            com.siddu.offlinedocai.ai.export.ChatExporter.copyChatToClipboard(
+                                context = context,
+                                conversationId = convId,
+                                conversationTitle = chat?.title ?: "Chat $convId",
+                                documentId = chat?.documentId,
+                                messages = messages
+                            )
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Export Chat JSON"
+                        )
+                    }
                 }
             )
         }
@@ -658,6 +703,23 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Active Question Queue Status Banner
+            if (queueState.conversationId == convId) {
+                if (queueState.isActive || queueState.isPaused) {
+                    QuestionQueueBanner(
+                        queueState = queueState,
+                        onPause = { viewModel.pauseQuestionQueue() },
+                        onResume = { viewModel.resumeQuestionQueue() },
+                        onStop = { viewModel.stopQuestionQueue() }
+                    )
+                } else if (queueState.isCompleted) {
+                    QuestionQueueCompletedBanner(
+                        queueState = queueState,
+                        onDismiss = { viewModel.clearQuestionQueue() }
+                    )
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
@@ -685,15 +747,23 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                                         msg.sources.split("|||").filter { it.isNotBlank() }
                                     }
                                     if (chunksList.isNotEmpty()) {
-                                        var expanded by remember { mutableStateOf(false) }
+                                        var expanded by remember(msg.id) { mutableStateOf(false) }
+                                        val interactionSource = remember { MutableInteractionSource() }
+                                        val isPressed by interactionSource.collectIsPressedAsState()
+
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Divider(color = Color.LightGray.copy(alpha = 0.5f))
+                                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable { expanded = !expanded }
-                                                .padding(vertical = 4.dp),
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(if (isPressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                                                .clickable(
+                                                    interactionSource = interactionSource,
+                                                    indication = rememberRipple(bounded = true)
+                                                ) { expanded = !expanded }
+                                                .padding(vertical = 6.dp, horizontal = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
@@ -704,7 +774,11 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
-                                        if (expanded) {
+                                        AnimatedVisibility(
+                                            visible = expanded,
+                                            enter = expandVertically(),
+                                            exit = shrinkVertically()
+                                        ) {
                                             Column(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -756,6 +830,16 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(
+                    onClick = { showQueueDialog = true },
+                    enabled = !queueState.isActive
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlaylistAdd,
+                        contentDescription = "Question Queue",
+                        tint = if (queueState.isActive) Color.Gray else MaterialTheme.colorScheme.primary
+                    )
+                }
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
@@ -770,13 +854,343 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                             textInput = ""
                         }
                     },
-                    enabled = textInput.isNotBlank() && chatState !is ChatRepository.ChatState.Thinking
+                    enabled = textInput.isNotBlank() && chatState !is ChatRepository.ChatState.Thinking && !queueState.isActive
                 ) {
                     Icon(Icons.Default.Send, contentDescription = "Send")
                 }
             }
         }
     }
+
+    if (showQueueDialog) {
+        QuestionQueueDialog(
+            convId = convId,
+            linkedDocIds = linkedDocIds,
+            viewModel = viewModel,
+            onDismiss = { showQueueDialog = false }
+        )
+    }
+}
+
+@Composable
+fun QuestionQueueBanner(
+    queueState: com.siddu.offlinedocai.ai.queue.QuestionQueueState,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlaylistPlay,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (queueState.isPaused) "Queue Paused" else "Queue Processing",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = "Question ${queueState.completedCount + 1} of ${queueState.totalQuestions}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (queueState.isPaused) {
+                        IconButton(onClick = onResume) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Resume Queue", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    } else {
+                        IconButton(onClick = onPause) {
+                            Icon(Icons.Default.Pause, contentDescription = "Pause Queue", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    IconButton(onClick = onStop) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop Queue", tint = Color.Red)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { queueState.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+            )
+
+            if (!queueState.currentQuestion.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Current: \"${queueState.currentQuestion}\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            if (queueState.pendingQuestions.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .clickable { expanded = !expanded }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (expanded) "▲ Hide upcoming (${queueState.pendingQuestions.size})" else "▼ View upcoming (${queueState.pendingQuestions.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                AnimatedVisibility(visible = expanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        queueState.pendingQuestions.forEachIndexed { idx, q ->
+                            Text(
+                                text = "${queueState.completedCount + 2 + idx}. $q",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun QuestionQueueCompletedBanner(
+    queueState: com.siddu.offlinedocai.ai.queue.QuestionQueueState,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFE8F5E9)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF2E7D32)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = "Question Queue Completed!",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1B5E20)
+                    )
+                    Text(
+                        text = "All ${queueState.totalQuestions} questions processed successfully.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF2E7D32)
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color(0xFF2E7D32))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun QuestionQueueDialog(
+    convId: Long,
+    linkedDocIds: List<Long>,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit
+) {
+    var rawText by remember { mutableStateOf("") }
+    val detectedQuestions = remember(rawText) {
+        viewModel.parseQuestions(rawText)
+    }
+
+    val sampleJson = """[
+  "What is the main topic of this document?",
+  "Summarize the key findings or recommendations.",
+  "What are the core technical terms defined in the text?"
+]"""
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.PlaylistAdd,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Question Queue", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = "Provide an array of questions in JSON format (or newline-separated). Questions will be asked sequentially one after another.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { rawText = sampleJson },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Sample JSON", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = { rawText = "" },
+                        enabled = rawText.isNotEmpty()
+                    ) {
+                        Text("Clear", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = rawText,
+                    onValueChange = { rawText = it },
+                    placeholder = {
+                        Text(
+                            text = "[\n  \"First question?\",\n  \"Second question?\"\n]",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Detection status card
+                if (detectedQuestions.isNotEmpty()) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Detected ${detectedQuestions.size} question${if (detectedQuestions.size > 1) "s" else ""} in sequential order:",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            LazyColumn(modifier = Modifier.heightIn(max = 100.dp)) {
+                                items(detectedQuestions.take(5)) { q ->
+                                    val idx = detectedQuestions.indexOf(q) + 1
+                                    Text(
+                                        text = "$idx. $q",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 2
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
+                                if (detectedQuestions.size > 5) {
+                                    item {
+                                        Text(
+                                            text = "...and ${detectedQuestions.size - 5} more questions",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (rawText.isNotBlank()) {
+                    Text(
+                        text = "No questions detected yet. Please enter a valid JSON array or lines.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (detectedQuestions.isNotEmpty()) {
+                        viewModel.startQuestionQueue(convId, detectedQuestions, linkedDocIds)
+                        onDismiss()
+                    }
+                },
+                enabled = detectedQuestions.isNotEmpty()
+            ) {
+                Text("Start Queue (${detectedQuestions.size})")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

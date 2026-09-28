@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.siddu.offlinedocai.ai.queue.QuestionQueueManager
+import com.siddu.offlinedocai.ai.queue.QuestionQueueState
+import com.siddu.offlinedocai.ai.queue.QuestionQueueParser
 import java.io.File
 
 /**
@@ -61,6 +64,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val importState: StateFlow<DocumentRepository.ImportState> = documentRepository.importState
     val chatState: StateFlow<ChatRepository.ChatState> = chatRepository.chatState
+
+    // Question Queue Manager for batch/sequential question execution
+    val questionQueueManager = QuestionQueueManager(viewModelScope)
+    val questionQueueState: StateFlow<QuestionQueueState> = questionQueueManager.queueState
 
     init {
         // Load existing data from DB
@@ -147,6 +154,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Send a message in a conversation */
     fun sendMessage(convId: Long, text: String, docIds: List<Long>) {
         chatRepository.sendMessage(convId, text, docIds)
+    }
+
+    /** Start sequential processing of multiple questions */
+    fun startQuestionQueue(convId: Long, questions: List<String>, docIds: List<Long>) {
+        questionQueueManager.startQueue(convId, questions, docIds) { targetConvId, questionText, targetDocIds ->
+            chatRepository.executeMessage(targetConvId, questionText, targetDocIds)
+        }
+    }
+
+    fun pauseQuestionQueue() {
+        questionQueueManager.pauseQueue()
+    }
+
+    fun resumeQuestionQueue() {
+        questionQueueManager.resumeQueue()
+    }
+
+    fun stopQuestionQueue() {
+        questionQueueManager.stopQueue()
+    }
+
+    fun clearQuestionQueue() {
+        questionQueueManager.clearQueue()
+    }
+
+    fun parseQuestions(rawInput: String): List<String> {
+        return QuestionQueueParser.parseQuestions(rawInput)
     }
 
     // Delete a document

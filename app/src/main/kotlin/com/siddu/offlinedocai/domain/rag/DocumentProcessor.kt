@@ -86,8 +86,9 @@ object DocumentProcessor {
                         stripper.startPage = i
                         stripper.endPage = i
                         val rawText = stripper.getText(document).trim()
-                        if (rawText.isNotEmpty()) {
-                            pages.add(ExtractedPage(pageNumber = i, text = rawText))
+                        val cleanedText = cleanBoilerplate(rawText)
+                        if (cleanedText.isNotEmpty()) {
+                            pages.add(ExtractedPage(pageNumber = i, text = cleanedText))
                         }
                     }
                     return ExtractedDocument(pageCount = pageCount, pages = pages)
@@ -114,7 +115,7 @@ object DocumentProcessor {
                     for (p in paragraphs) {
                         textBuilder.append(p.text).append('\n')
                     }
-                    val fullText = textBuilder.toString().trim()
+                    val fullText = cleanBoilerplate(textBuilder.toString().trim())
                     val page = ExtractedPage(pageNumber = 1, text = fullText)
                     return ExtractedDocument(pageCount = 1, pages = listOf(page))
                 }
@@ -136,7 +137,7 @@ object DocumentProcessor {
                 BufferedReader(InputStreamReader(stream)).use { reader ->
                     val lines = reader.readLines()
                     if (lines.isEmpty()) throw DocumentProcessingException.EmptyDocument("TXT file is empty")
-                    val fullText = lines.joinToString("\n").trim()
+                    val fullText = cleanBoilerplate(lines.joinToString("\n").trim())
                     val page = ExtractedPage(pageNumber = 1, text = fullText)
                     return ExtractedDocument(pageCount = 1, pages = listOf(page))
                 }
@@ -145,5 +146,21 @@ object DocumentProcessor {
             Log.e(TAG, "TXT extraction failed", e)
             throw DocumentProcessingException.TxtParsingFailed("Failed to read TXT file", e)
         }
+    }
+
+    /**
+     * Strips boilerplate headers, footers, standalone page numbering, and excessive empty lines
+     * based on Pocket RAG Preprocessing specifications.
+     */
+    private fun cleanBoilerplate(rawText: String): String {
+        return rawText.lines()
+            .map { it.trim() }
+            .filter { line ->
+                line.isNotEmpty() &&
+                !line.matches(Regex("^(page\\s+)?\\d+(\\s+of\\s+\\d+)?$", RegexOption.IGNORE_CASE)) &&
+                !line.matches(Regex("^[-_=*~]{3,}$"))
+            }
+            .joinToString("\n")
+            .replace(Regex("\\n{3,}"), "\n\n")
     }
 }

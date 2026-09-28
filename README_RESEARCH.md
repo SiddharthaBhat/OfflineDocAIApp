@@ -6,4 +6,5 @@ This directory tracks the architectural iterations, experimental setups, RAG pip
 
 - **[State 001 - Initial Offline RAG Architecture & Baseline Mechanics](docs/state_001.md)**: Details the baseline document parsing, sliding-window chunking, vector storage with Room DB, cosine similarity calculation, and fallback retrieval strategies.
 - **[State 002 - Enhanced Retrieval & SLM Lifecycle Management](docs/state_002.md)**: Implements dynamic query routing, uniform stratified sampling for generic queries (*"What is this doc about?"*), TF-IDF lexical search, clean summary synthesis, and on-device model management (switching, downloading, and deleting SLMs).
+- **[State 003 - Edge-Native Literature Alignment: 2-Stage Hybrid Retrieval, Selective Content Reduction & Memory Governance](docs/state_003.md)**: Integrates breakthroughs from Pocket RAG, MobileRAG (KAIST), RAGdb, SmartRAG, and HeRo, including 2-stage hybrid retrieval ($\alpha=0.6$), sentence-level Selective Content Reduction (SCR), Android runtime memory governance, and incremental ingestion.
 

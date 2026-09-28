@@ -63,6 +63,15 @@ class DocumentRepository(
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 _importState.value = ImportState.Reading
+                
+                // RAGdb Incremental Ingestion: check if document already exists and is completed
+                val existingDoc = documentDao.getByUri(uri.toString())
+                if (existingDoc != null && existingDoc.status == "COMPLETED") {
+                    Log.i(TAG, "Document already indexed: ${existingDoc.name} (id=${existingDoc.id}). Reusing index.")
+                    _importState.value = ImportState.Completed
+                    return@launch
+                }
+
                 val result = DocumentProcessor.extractDocument(context, uri)
                 
                 val fileName = getFileName(uri)
@@ -108,9 +117,23 @@ class DocumentRepository(
 
                 _importState.value = ImportState.Saving
                 chunkDao.insertAll(allChunks)
+
+                // Generate and serialize Document Knowledge Profile (Path A)
+                val profile = com.siddu.offlinedocai.ai.profiler.DocumentProfiler.profileDocument(
+                    documentId = docId,
+                    title = fileName,
+                    pages = result.pages
+                )
+                val profileJson = com.siddu.offlinedocai.ai.profiler.DocumentProfiler.toJson(profile)
                 
-                // Update document to completed
-                documentDao.update(document.copy(id = docId, status = "COMPLETED"))
+                // Update document to completed with profileJson
+                documentDao.update(
+                    document.copy(
+                        id = docId,
+                        status = "COMPLETED",
+                        profileJson = profileJson
+                    )
+                )
                 
                 _importState.value = ImportState.Completed
             } catch (e: java.lang.Exception) {

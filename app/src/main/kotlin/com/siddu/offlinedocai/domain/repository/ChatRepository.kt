@@ -49,22 +49,42 @@ class ChatRepository(
         val convId = conversationDao.insert(conversation)
 
         // Insert initial greeting message
+        // Insert initial greeting message
         if (documentId != null && documentId > 0) {
             val doc = db.documentDao().getById(documentId)
             val docName = doc?.name ?: "Selected Document"
             val pageCount = doc?.pageCount ?: 0
-            
-            val welcomeText = """
+            val profile = doc?.profileJson?.let { com.siddu.offlinedocai.ai.profiler.DocumentProfiler.fromJson(it) }
+
+            val welcomeText = if (profile != null) {
+                val sectionsList = profile.sections.joinToString("\n") { "• **Pages ${it.pageStart}–${it.pageEnd}**: ${it.title}" }
+                val conceptsList = profile.coreGlossary.take(5).joinToString(", ")
+                val questionsList = profile.suggestedQuestions.joinToString("\n") { "💡 *\"$it\"*" }
+
+                """
+📖 **Document Briefing: ${profile.title}**
+*Domain: ${profile.domain}* (${profile.pageCount} pages)
+
+### 📌 Summary & Core Concepts:
+This guide covers foundational and practical concepts including: **$conceptsList**.
+
+### 🗂️ Document Structure:
+$sectionsList
+
+---
+### 💡 Suggested Questions:
+$questionsList
+""".trimIndent()
+            } else {
+                """
 👋 Welcome to your document assistant! 
 
-I have parsed **$docName** ($pageCount pages), computed semantic embeddings, and successfully indexed the text chunks into local memory database.
+I have indexed **$docName** ($pageCount pages). You can ask me to search, summarize, or retrieve specific key details from it.
 
-### Document Summary:
-This document is ready for local Retrieval-Augmented Generation (RAG) queries. You can ask me to search, summarize, or retrieve specific key details from it.
-
-How may I help you with it?
+How may I help you today?
 """.trimIndent()
-            
+            }
+
             messageDao.insert(
                 MessageEntity(
                     id = 0,
@@ -97,81 +117,132 @@ How may I help you today?
         convId
     }
 
-    /** Send a user message, run RAG or LLM, and stream the assistant response */
-    fun sendMessage(conversationId: Long, userText: String, relevantDocumentIds: List<Long>) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                _chatState.value = ChatState.Thinking
-                // Persist user message
-                val userMsg = MessageEntity(
-                    id = 0,
-                    conversationId = conversationId,
-                    role = "user",
-                    content = userText,
-                    timestamp = System.currentTimeMillis()
+    /** Process a single message sequentially with RAG/LLM and stream the response */
+    suspend fun executeMessage(conversationId: Long, userText: String, relevantDocumentIds: List<Long>) = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        try {
+            _chatState.value = ChatState.Thinking
+            // Persist user message
+            val userMsg = MessageEntity(
+                id = 0,
+                conversationId = conversationId,
+                role = "user",
+                content = userText,
+                timestamp = System.currentTimeMillis()
+            )
+            messageDao.insert(userMsg)
+
+            // Clean and filter valid document IDs (greater than 0)
+            val cleanDocIds = relevantDocumentIds.filter { it > 0 }
+
+            // Check for primary document profile
+            val primaryDoc = if (cleanDocIds.isNotEmpty()) db.documentDao().getById(cleanDocIds.first()) else null
+            val profile = primaryDoc?.profileJson?.let { com.siddu.offlinedocai.ai.profiler.DocumentProfiler.fromJson(it) }
+
+            // Run Intent Classification and Context-Aware Reformulation
+            val reformulation = com.siddu.offlinedocai.ai.reformulation.QueryReformulator.classifyAndRewrite(userText, profile)
+
+            val (prompt, sourcesData, directAnswer) = if (cleanDocIds.isEmpty()) {
+                Triple(buildNormalPrompt(userText), null, null)
+            } else if (reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.GlobalSummary && profile != null) {
+                // Global Summary Short-Circuit (0ms Vector Search)
+                val sectionsList = profile.sections.joinToString("\n") { "• **Pages ${it.pageStart}–${it.pageEnd}**: ${it.title}" }
+                val summaryAnswer = """
+📄 **Executive Summary: ${profile.title}**
+
+This document covers **${profile.domain}** across ${profile.pageCount} pages.
+
+### 🗂️ Document Sections:
+$sectionsList
+
+### 📌 Core Key Concepts:
+${profile.coreGlossary.joinToString(", ")}
+
+---
+*Tip: You can ask specific questions about any of the sections above, or request a specific page (e.g., "page ${profile.sections.firstOrNull()?.pageStart ?: 1}").*
+""".trimIndent()
+                Triple("", null, summaryAnswer)
+            } else {
+                // 1. Adaptive Memory Governance (Pocket RAG / HeRo)
+                val govConfig = com.siddu.offlinedocai.ai.governor.MemoryGovernor.getAdaptiveConfig()
+
+                // 2. Query Embedding on rewritten search string
+                val queryEmbedding = embeddingEngine.getEmbedding(reformulation.searchString)
+
+                // 3. Two-Stage Hybrid Retrieval with Section Prior
+                val rawChunks = vectorStore.retrieve(
+                    queryEmbedding = queryEmbedding,
+                    relevantDocumentIds = cleanDocIds,
+                    topK = govConfig.topK,
+                    query = reformulation.searchString,
+                    intent = reformulation.intent,
+                    profile = profile
                 )
-                messageDao.insert(userMsg)
 
-                // Clean and filter valid document IDs (greater than 0)
-                val cleanDocIds = relevantDocumentIds.filter { it > 0 }
+                // 4. Selective Content Reduction (SCR / SCC)
+                val isDefinitional = reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Definitional
+                val compressedChunks = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.reduceChunks(
+                    chunks = rawChunks,
+                    query = userText,
+                    retentionRatio = if (isDefinitional) 0.85f else govConfig.scrRetentionRatio,
+                    isGenericQuery = isDefinitional
+                )
 
-                // Build prompt based on whether valid documents are linked
-                val (prompt, sourcesData) = if (cleanDocIds.isEmpty()) {
-                    Pair(buildNormalPrompt(userText), null)
-                } else {
-                    // Embedding of the query
-                    val queryEmbedding = embeddingEngine.getEmbedding(userText)
+                val contextText = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.formatCompressedContext(compressedChunks)
 
-                    // Retrieve relevant chunks (top‑10)
-                    val chunks = vectorStore.retrieve(queryEmbedding, cleanDocIds, topK = 10, query = userText)
-                    val contextText = chunks.joinToString("\n\n") { "[Page ${it.pageNumber}] ${it.text}" }
-
-                    // Format chunks as JSON-like/readable source blocks for UI dropdown
-                    val sourcesJson = chunks.joinToString("|||") { "Page ${it.pageNumber}: ${it.text}" }
-
-                    // Build prompt
-                    val p = buildPrompt(contextText, userText)
-                    Pair(p, sourcesJson)
+                // Format chunks as informative source blocks for UI dropdown
+                val sourcesJson = compressedChunks.joinToString("|||") {
+                    "Page ${it.originalChunk.pageNumber} [SCR -${(it.tokenReductionPercentage * 100).toInt()}%]: ${it.compressedText}"
                 }
 
-                // Generate full answer from GGUFLLM
-                val answer = llm.generate(prompt)
+                // Build prompt
+                val p = buildPrompt(contextText, userText)
+                Triple(p, sourcesJson, null)
+            }
 
-                // Insert empty assistant message to initialize streaming updates
-                val assistantMsgId = messageDao.insert(
+            // Generate full answer from GGUFLLM or direct answer
+            val answer = directAnswer ?: llm.generate(prompt)
+
+            // Insert empty assistant message to initialize streaming updates
+            val assistantMsgId = messageDao.insert(
+                MessageEntity(
+                    id = 0,
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = "",
+                    timestamp = System.currentTimeMillis(),
+                    sources = sourcesData
+                )
+            )
+
+            // Simulate token/word streaming updates
+            val words = answer.split(" ")
+            var currentContent = ""
+            for (i in words.indices) {
+                currentContent += (if (i > 0) " " else "") + words[i]
+                messageDao.update(
                     MessageEntity(
-                        id = 0,
+                        id = assistantMsgId,
                         conversationId = conversationId,
                         role = "assistant",
-                        content = "",
+                        content = currentContent,
                         timestamp = System.currentTimeMillis(),
                         sources = sourcesData
                     )
                 )
-
-                // Simulate token/word streaming updates
-                val words = answer.split(" ")
-                var currentContent = ""
-                for (i in words.indices) {
-                    currentContent += (if (i > 0) " " else "") + words[i]
-                    messageDao.update(
-                        MessageEntity(
-                            id = assistantMsgId,
-                            conversationId = conversationId,
-                            role = "assistant",
-                            content = currentContent,
-                            timestamp = System.currentTimeMillis(),
-                            sources = sourcesData
-                        )
-                    )
-                    delay(40) // speed of stream
-                }
-
-                _chatState.value = ChatState.Idle
-            } catch (e: Exception) {
-                Log.e(TAG, "Chat generation failed", e)
-                _chatState.value = ChatState.Error(e.message ?: "Unknown error")
+                delay(40) // speed of stream
             }
+
+            _chatState.value = ChatState.Idle
+        } catch (e: Exception) {
+            Log.e(TAG, "Chat generation failed", e)
+            _chatState.value = ChatState.Error(e.message ?: "Unknown error")
+        }
+    }
+
+    /** Send a user message, run RAG or LLM, and stream the assistant response asynchronously */
+    fun sendMessage(conversationId: Long, userText: String, relevantDocumentIds: List<Long>) {
+        CoroutineScope(Dispatchers.IO).launch {
+            executeMessage(conversationId, userText, relevantDocumentIds)
         }
     }
 

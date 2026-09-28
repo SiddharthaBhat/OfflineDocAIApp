@@ -34,6 +34,9 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -58,6 +61,10 @@ dependencies {
     // PDF & DOCX parsing (Android compatible)
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("org.apache.poi:poi-ooxml:5.2.3")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     // Debug tooling
     debugImplementation("androidx.compose.ui:ui-tooling:1.6.8")

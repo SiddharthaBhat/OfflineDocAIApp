@@ -25,4 +25,7 @@ interface DocumentDao {
 
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): DocumentEntity?
+
+    @Query("SELECT * FROM documents WHERE uri = :uri LIMIT 1")
+    suspend fun getByUri(uri: String): DocumentEntity?
 }

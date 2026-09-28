@@ -12,5 +12,6 @@ data class DocumentEntity(
     val type: String,
     val pageCount: Int = 0,
     val addedAt: Long = Date().time,
-    val status: String = "PROCESSING"
+    val status: String = "PROCESSING",
+    val profileJson: String? = null
 )

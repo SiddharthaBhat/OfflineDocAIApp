@@ -12,7 +12,7 @@ import com.siddu.offlinedocai.data.entities.ChunkEntity
 import com.siddu.offlinedocai.data.entities.ConversationEntity
 import com.siddu.offlinedocai.data.entities.MessageEntity
 
-@Database(entities = [DocumentEntity::class, ChunkEntity::class, ConversationEntity::class, MessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DocumentEntity::class, ChunkEntity::class, ConversationEntity::class, MessageEntity::class], version = 2, exportSchema = false)
 @TypeConverters(Converters::class, FloatArrayConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun documentDao(): DocumentDao
