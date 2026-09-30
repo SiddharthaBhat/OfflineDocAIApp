@@ -33,11 +33,20 @@ public class LlamaContext {
 
             if (primaryAbi.contains("arm64")) {
                 String cpuInfo = getCpuInfo();
-                boolean hasDotprod = cpuInfo.contains("dotprod") || cpuInfo.contains("asimddp");
-                boolean hasI8mm = cpuInfo.contains("i8mm");
-                boolean hasV82 = cpuInfo.contains("asimd") && cpuInfo.contains("crc32") && cpuInfo.contains("aes");
+                boolean isUnsafeDotprod = isUnsafeDotprodDevice(cpuInfo);
+                boolean hasDotprod = !isUnsafeDotprod && (cpuInfo.contains("dotprod") || cpuInfo.contains("asimddp"));
+                boolean hasI8mm = !isUnsafeDotprod && cpuInfo.contains("i8mm");
+                boolean hasV82 = !isUnsafeDotprod && cpuInfo.contains("asimd") && cpuInfo.contains("crc32") && cpuInfo.contains("aes");
 
-                if (hasV82 && hasDotprod && hasI8mm) {
+                if (isUnsafeDotprod) {
+                    Log.i(TAG, "MediaTek Helio / non-standard dotprod chipset detected. Using stable baseline librnllama_v8.so");
+                    try {
+                        System.loadLibrary("rnllama_v8");
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.i(TAG, "Fallback loading librnllama.so");
+                        System.loadLibrary("rnllama");
+                    }
+                } else if (hasV82 && hasDotprod && hasI8mm) {
                     Log.i(TAG, "Loading librnllama_v8_2_dotprod_i8mm.so");
                     System.loadLibrary("rnllama_v8_2_dotprod_i8mm");
                 } else if (hasV82 && hasDotprod) {
@@ -80,6 +89,18 @@ public class LlamaContext {
                 Log.e(TAG, "Fatal: unable to load librnllama.so", t2);
             }
         }
+    }
+
+    private static boolean isUnsafeDotprodDevice(String cpuInfo) {
+        String hardware = (Build.HARDWARE != null ? Build.HARDWARE : "").toLowerCase();
+        String board = (Build.BOARD != null ? Build.BOARD : "").toLowerCase();
+        String cpu = cpuInfo.toLowerCase();
+
+        // MediaTek MT67xx Helio G/P series (e.g. MT6768, MT6769, MT6785, MT6771, MT6779, Helio G80/G85/G88/G90/G95/P60/P65)
+        return hardware.contains("mt676") || hardware.contains("mt677") ||
+                hardware.contains("mt678") || board.contains("mt676") || board.contains("mt677") ||
+                board.contains("mt678") || cpu.contains("mt676") || cpu.contains("mt677") ||
+                cpu.contains("mt678") || cpu.contains("helio");
     }
 
     private static String getCpuInfo() {
