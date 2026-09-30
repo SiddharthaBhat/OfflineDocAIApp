@@ -61,6 +61,8 @@ import com.siddu.offlinedocai.domain.repository.ChatRepository
 import com.siddu.offlinedocai.domain.repository.DownloadState
 import com.siddu.offlinedocai.ai.llm.AvailableLlmModel
 import com.siddu.offlinedocai.ai.llm.AvailableLlmModels
+import com.siddu.offlinedocai.ai.embeddings.AvailableEmbeddingModel
+import com.siddu.offlinedocai.ai.embeddings.AvailableEmbeddingModels
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.launch
@@ -367,6 +369,122 @@ fun ModelOptionCard(
 }
 
 @Composable
+fun EmbeddingModelOptionCard(
+    model: AvailableEmbeddingModel,
+    isDownloaded: Boolean,
+    isSelected: Boolean,
+    isDownloading: Boolean,
+    downloadProgress: DownloadState.Progress?,
+    onDownload: () -> Unit,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                isSelected -> MaterialTheme.colorScheme.primaryContainer
+                isDownloaded -> MaterialTheme.colorScheme.surfaceVariant
+                else -> MaterialTheme.colorScheme.surface
+            }
+        ),
+        shape = RoundedCornerShape(12.dp),
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isDownloaded) Modifier.clickable { onSelect() } else Modifier
+            )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = model.name,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${model.format} • ${model.dimension}-dim • Size: ${model.downloadSize}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when {
+                        isSelected -> MaterialTheme.colorScheme.primary
+                        isDownloaded -> MaterialTheme.colorScheme.secondaryContainer
+                        else -> MaterialTheme.colorScheme.tertiaryContainer
+                    }
+                ) {
+                    Text(
+                        text = when {
+                            isSelected -> "Active"
+                            isDownloaded -> "Ready"
+                            else -> model.badge
+                        },
+                        color = when {
+                            isSelected -> MaterialTheme.colorScheme.onPrimary
+                            isDownloaded -> MaterialTheme.colorScheme.onSecondaryContainer
+                            else -> MaterialTheme.colorScheme.onTertiaryContainer
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = model.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (isDownloading && downloadProgress != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    progress = { downloadProgress.percent / 100f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Downloading: ${downloadProgress.percent}% (${downloadProgress.bytesDownloaded / 1024 / 1024} MB / ${downloadProgress.totalBytes / 1024 / 1024} MB)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else if (!isDownloaded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onDownload,
+                    enabled = !isDownloading,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Download ${model.downloadSize}")
+                }
+            } else if (!isSelected) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Tap to switch to this model for embeddings",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun ModelDownloadBanner(viewModel: MainViewModel) {
     val embedDownloadState by viewModel.embeddingDownloadState.collectAsState()
     val llmDownloadState by viewModel.llmDownloadState.collectAsState()
@@ -387,7 +505,7 @@ fun ModelDownloadBanner(viewModel: MainViewModel) {
             Spacer(modifier = Modifier.height(8.dp))
 
             if (!isEmbedDownloaded) {
-                Text("• Embedding Model (MiniLM):", fontWeight = FontWeight.Bold)
+                Text("• Embedding Model (all-MiniLM-L6-v2 ONNX):", fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(4.dp))
                 when (embedDownloadState) {
                     is DownloadState.Idle -> {
@@ -411,8 +529,11 @@ fun ModelDownloadBanner(viewModel: MainViewModel) {
                         val error = embedDownloadState as DownloadState.Error
                         Text("Error: ${error.message}", color = Color.Red, style = MaterialTheme.typography.bodySmall)
                         Spacer(modifier = Modifier.height(4.dp))
-                        Button(onClick = { viewModel.downloadEmbeddingModel() }) {
-                            Text("Retry Embedding Download")
+                        val defaultEmbed = AvailableEmbeddingModels.list.firstOrNull()
+                        if (defaultEmbed != null) {
+                            Button(onClick = { viewModel.downloadEmbeddingModel(defaultEmbed.downloadUrl, defaultEmbed.fileName) }) {
+                                Text("Retry Embedding Download")
+                            }
                         }
                     }
                 }
@@ -1793,11 +1914,16 @@ fun CopyChatDialog(
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val isEmbedDownloaded by viewModel.isEmbeddingModelDownloaded.collectAsState()
+    val downloadedEmbeddingModels by viewModel.downloadedEmbeddingModels.collectAsState()
+    val selectedEmbeddingModel by viewModel.selectedEmbeddingModel.collectAsState()
+    val embeddingDownloadState by viewModel.embeddingDownloadState.collectAsState()
+    val currentlyDownloadingEmbed by viewModel.currentlyDownloadingEmbeddingModel.collectAsState()
+
     val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
     val downloadedLlmModels by viewModel.downloadedLlmModels.collectAsState()
     val selectedLlmModel by viewModel.selectedLlmModel.collectAsState()
     val llmDownloadState by viewModel.llmDownloadState.collectAsState()
-    val currentlyDownloading by viewModel.currentlyDownloadingModel.collectAsState()
+    val currentlyDownloadingLlm by viewModel.currentlyDownloadingModel.collectAsState()
     val scrollState = rememberScrollState()
 
     Column(
@@ -1808,25 +1934,140 @@ fun SettingsScreen(viewModel: MainViewModel) {
     ) {
         Text("Settings & Model Management", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(24.dp))
-        
-        Text("Embedding Model:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+
+        // ==========================================
+        // SECTION 1: EMBEDDING MODELS
+        // ==========================================
+        Text("Embedding Models (Vector Search)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text("Dense vector models used to index documents and retrieve precise text chunks for questions.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text("Installed Embedding Models:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(8.dp))
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("all-MiniLM-L6-v2 (Embedding)", fontWeight = FontWeight.SemiBold)
-                    Text("Vector embeddings for document search", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+
+        if (downloadedEmbeddingModels.isEmpty()) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Text("No embedding models downloaded yet. Download one below to enable dense vector search.", modifier = Modifier.padding(16.dp), color = Color.Gray)
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                downloadedEmbeddingModels.forEach { file ->
+                    val isSelected = selectedEmbeddingModel?.name == file.name
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.selectEmbeddingModel(file) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(file.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (isSelected) "Active for Document Search" else "Tap to Select",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                            IconButton(onClick = { viewModel.deleteEmbeddingModel(file) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete Embedding Model", tint = Color.Red)
+                            }
+                        }
+                    }
                 }
-                Text(if (isEmbedDownloaded) "Ready" else "Downloading...", color = if (isEmbedDownloaded) Color(0xFF4CAF50) else Color(0xFFFF9800), fontWeight = FontWeight.Bold)
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Embedding Model Catalog (Download Options):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (embeddingDownloadState is DownloadState.Completed) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Embedding model download complete!", color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold)
+                    Button(onClick = { viewModel.resetEmbeddingDownloadState() }) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        if (embeddingDownloadState is DownloadState.Error) {
+            val error = embeddingDownloadState as DownloadState.Error
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Error: ${error.message}", color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { viewModel.resetEmbeddingDownloadState() }) {
+                        Text("Retry")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            AvailableEmbeddingModels.list.forEach { model ->
+                val isDownloaded = downloadedEmbeddingModels.any { it.name == model.fileName }
+                val isSelected = selectedEmbeddingModel?.name == model.fileName
+                val isDownloading = currentlyDownloadingEmbed == model.fileName && embeddingDownloadState is DownloadState.Progress
+                val progress = if (isDownloading) embeddingDownloadState as DownloadState.Progress else null
+
+                EmbeddingModelOptionCard(
+                    model = model,
+                    isDownloaded = isDownloaded,
+                    isSelected = isSelected,
+                    isDownloading = isDownloading,
+                    downloadProgress = progress,
+                    onDownload = {
+                        viewModel.downloadEmbeddingModel(model.downloadUrl, model.fileName)
+                    },
+                    onSelect = {
+                        val file = downloadedEmbeddingModels.firstOrNull { it.name == model.fileName }
+                        if (file != null) viewModel.selectEmbeddingModel(file)
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+        HorizontalDivider()
         Spacer(modifier = Modifier.height(24.dp))
-        Text("Downloaded Models (Active & Installed):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+
+        // ==========================================
+        // SECTION 2: SLM / LLM MODELS
+        // ==========================================
+        Text("Language Models (SLM / LLM)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text("On-device generative models for answering questions and synthesizing document insights.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text("Installed SLM Models:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(8.dp))
 
         if (downloadedLlmModels.isEmpty()) {
@@ -1871,8 +2112,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-        Text("Model Catalog (Download Options):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("SLM Model Catalog (Download Options):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(4.dp))
         Text("Choose higher capacity models for better document comprehension & complex questions.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         Spacer(modifier = Modifier.height(12.dp))
@@ -1920,7 +2161,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             AvailableLlmModels.list.forEach { model ->
                 val isDownloaded = downloadedLlmModels.any { it.name == model.fileName }
                 val isSelected = selectedLlmModel?.name == model.fileName
-                val isDownloading = currentlyDownloading == model.fileName && llmDownloadState is DownloadState.Progress
+                val isDownloading = currentlyDownloadingLlm == model.fileName && llmDownloadState is DownloadState.Progress
                 val progress = if (isDownloading) llmDownloadState as DownloadState.Progress else null
 
                 ModelOptionCard(

@@ -15,6 +15,7 @@ import com.siddu.offlinedocai.domain.repository.ChatRepository
 import com.siddu.offlinedocai.domain.repository.ModelDownloader
 import com.siddu.offlinedocai.domain.repository.DownloadState
 import com.siddu.offlinedocai.ai.retrieval.VectorStore
+import com.siddu.offlinedocai.ai.embeddings.AvailableEmbeddingModels
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,7 +28,7 @@ import java.io.File
 
 /**
  * Central ViewModel for the OfflineDocAI app.
- * Provides access to the Room database and exposes StateFlows for UI observation.
+ * Provides access to the Room database, model downloads (Embedding & LLM), and exposes StateFlows for UI observation.
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val database: AppDatabase = Room.databaseBuilder(
@@ -51,13 +52,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isEmbeddingModelDownloaded = MutableStateFlow(false)
     val isLlmModelDownloaded = MutableStateFlow(false)
 
+    // Embedding Model Management
     private val embeddingDownloader = ModelDownloader(application)
     val embeddingDownloadState: StateFlow<DownloadState> = embeddingDownloader.downloadState
+    val currentlyDownloadingEmbeddingModel = MutableStateFlow<String?>(null)
+    val downloadedEmbeddingModels = MutableStateFlow<List<File>>(emptyList())
+    val selectedEmbeddingModel = MutableStateFlow<File?>(null)
 
+    // LLM Model Management
     private val llmDownloader = ModelDownloader(application)
     val llmDownloadState: StateFlow<DownloadState> = llmDownloader.downloadState
     val currentlyDownloadingModel = MutableStateFlow<String?>(null)
-
     val downloadedLlmModels = MutableStateFlow<List<File>>(emptyList())
     val selectedLlmModel = MutableStateFlow<File?>(null)
 
@@ -93,18 +98,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkModels() {
         val embedDir = File(getApplication<Application>().filesDir, "models/embeddings")
-        val hasEmbed = embedDir.listFiles()?.any { it.extension.equals("gguf", ignoreCase = true) } == true
-        isEmbeddingModelDownloaded.value = hasEmbed
+        if (!embedDir.exists()) embedDir.mkdirs()
+
+        val embedFiles = embedDir.listFiles()?.filter {
+            it.extension.equals("onnx", ignoreCase = true) ||
+            it.extension.equals("gguf", ignoreCase = true)
+        } ?: emptyList()
+        downloadedEmbeddingModels.value = embedFiles
+        isEmbeddingModelDownloaded.value = embedFiles.isNotEmpty()
+
+        val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
+        val savedEmbedName = prefs.getString("selected_embedding_model", null)
+        val preferredEmbed = embedFiles.firstOrNull { it.name == savedEmbedName }
+            ?: embedFiles.firstOrNull { it.extension.equals("onnx", ignoreCase = true) }
+            ?: embedFiles.firstOrNull()
+        selectedEmbeddingModel.value = preferredEmbed
 
         val llmDir = File(getApplication<Application>().filesDir, "models/llm")
+        if (!llmDir.exists()) llmDir.mkdirs()
+
         val llmFiles = llmDir.listFiles()?.filter { it.extension.equals("gguf", ignoreCase = true) } ?: emptyList()
         downloadedLlmModels.value = llmFiles
         isLlmModelDownloaded.value = llmFiles.isNotEmpty()
 
+        val savedLlmName = prefs.getString("selected_llm_model", null)
+        val preferredLlm = llmFiles.firstOrNull { it.name == savedLlmName } ?: llmFiles.firstOrNull()
+        selectedLlmModel.value = preferredLlm
+    }
+
+    fun selectEmbeddingModel(file: File) {
+        selectedEmbeddingModel.value = file
         val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
-        val savedModelName = prefs.getString("selected_llm_model", null)
-        val preferred = llmFiles.firstOrNull { it.name == savedModelName } ?: llmFiles.firstOrNull()
-        selectedLlmModel.value = preferred
+        prefs.edit().putString("selected_embedding_model", file.name).apply()
+    }
+
+    fun deleteEmbeddingModel(file: File) {
+        viewModelScope.launch {
+            if (file.exists()) {
+                file.delete()
+            }
+            val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
+            if (prefs.getString("selected_embedding_model", null) == file.name) {
+                prefs.edit().remove("selected_embedding_model").apply()
+            }
+            checkModels()
+        }
+    }
+
+    fun downloadEmbeddingModel(urlStr: String, fileName: String) {
+        currentlyDownloadingEmbeddingModel.value = fileName
+        val destFile = File(getApplication<Application>().filesDir, "models/embeddings/$fileName")
+        viewModelScope.launch {
+            embeddingDownloader.downloadModel(urlStr, destFile)
+            checkModels()
+            if (selectedEmbeddingModel.value == null && destFile.exists()) {
+                selectEmbeddingModel(destFile)
+            }
+        }
     }
 
     fun selectLlmModel(file: File) {
@@ -128,18 +178,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun autoDownloadEmbeddingIfMissing() {
         if (!isEmbeddingModelDownloaded.value) {
-            downloadEmbeddingModel()
-        }
-    }
-
-    fun downloadEmbeddingModel() {
-        val destFile = File(getApplication<Application>().filesDir, "models/embeddings/all-MiniLM-L6-v2.Q4_K_M.gguf")
-        viewModelScope.launch {
-            embeddingDownloader.downloadModel(
-                "https://huggingface.co/leliuga/all-MiniLM-L6-v2-GGUF/resolve/main/all-MiniLM-L6-v2.Q4_K_M.gguf",
-                destFile
-            )
-            checkModels()
+            val defaultModel = AvailableEmbeddingModels.list.firstOrNull()
+            if (defaultModel != null) {
+                downloadEmbeddingModel(defaultModel.downloadUrl, defaultModel.fileName)
+            }
         }
     }
 
@@ -161,6 +203,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetEmbeddingDownloadState() {
+        currentlyDownloadingEmbeddingModel.value = null
         embeddingDownloader.resetState()
     }
 
