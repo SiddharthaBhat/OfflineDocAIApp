@@ -12,12 +12,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FormatAlignLeft
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -973,6 +976,7 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
     val queueState by viewModel.questionQueueState.collectAsState()
     var textInput by remember { mutableStateOf("") }
     var showQueueDialog by remember { mutableStateOf(false) }
+    var showCopyDialog by remember { mutableStateOf(false) }
 
     val linkedDocIds = chat?.documentId?.let { listOf(it) } ?: emptyList()
 
@@ -1004,19 +1008,11 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                         )
                     }
                     IconButton(
-                        onClick = {
-                            com.siddu.offlinedocai.ai.export.ChatExporter.copyChatToClipboard(
-                                context = context,
-                                conversationId = convId,
-                                conversationTitle = chat?.title ?: "Chat $convId",
-                                documentId = chat?.documentId,
-                                messages = messages
-                            )
-                        }
+                        onClick = { showCopyDialog = true }
                     ) {
                         Icon(
                             imageVector = Icons.Default.Share,
-                            contentDescription = "Export Chat JSON"
+                            contentDescription = "Copy / Export Chat"
                         )
                     }
                 }
@@ -1245,6 +1241,16 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
             linkedDocIds = linkedDocIds,
             viewModel = viewModel,
             onDismiss = { showQueueDialog = false }
+        )
+    }
+
+    if (showCopyDialog) {
+        CopyChatDialog(
+            conversationId = convId,
+            conversationTitle = chat?.title ?: "Chat $convId",
+            documentId = chat?.documentId,
+            messages = messages,
+            onDismiss = { showCopyDialog = false }
         )
     }
 }
@@ -1562,6 +1568,220 @@ fun QuestionQueueDialog(
                 Text("Start Queue (${detectedQuestions.size})")
             }
         },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun CopyChatDialog(
+    conversationId: Long,
+    conversationTitle: String,
+    documentId: Long?,
+    messages: List<MessageEntity>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Copy Conversation", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Select what you would like to copy to your clipboard:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Option 1: Everything (With retrieved context chunks)
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            com.siddu.offlinedocai.ai.export.ChatExporter.copyChatToClipboard(
+                                context = context,
+                                conversationId = conversationId,
+                                conversationTitle = conversationTitle,
+                                documentId = documentId,
+                                messages = messages,
+                                includeChunks = true
+                            )
+                            onDismiss()
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Description,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Copy Everything (with Chunks)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Copies full conversation JSON including all user queries, AI responses, and retrieved document chunks.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Option 2: Q&A Only (JSON without retrieved chunks)
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            com.siddu.offlinedocai.ai.export.ChatExporter.copyChatToClipboard(
+                                context = context,
+                                conversationId = conversationId,
+                                conversationTitle = conversationTitle,
+                                documentId = documentId,
+                                messages = messages,
+                                includeChunks = false
+                            )
+                            onDismiss()
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Chat,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Copy Q&A Only (No Chunks)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Copies only questions and responses (JSON) without any retrieved document chunks.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Option 3: Clean Readable Text Q&A
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            com.siddu.offlinedocai.ai.export.ChatExporter.copyPlainTextQnAToClipboard(
+                                context = context,
+                                conversationTitle = conversationTitle,
+                                messages = messages
+                            )
+                            onDismiss()
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FormatAlignLeft,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Copy Q&A as Clean Text",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Copies clean formatted Markdown text (Q1, Answer, Q2...) for easy sharing.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
