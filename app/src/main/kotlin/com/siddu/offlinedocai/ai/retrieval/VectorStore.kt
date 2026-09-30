@@ -22,7 +22,7 @@ class VectorStore(private val chunkDao: ChunkDao) {
 
     companion object {
         private const val ALPHA = 0.60f // Pocket RAG optimal semantic-lexical balance
-        private const val CANDIDATE_POOL_SIZE = 30 // Stage 1 candidate pool size
+        private const val CANDIDATE_POOL_SIZE = 40 // Stage 1 candidate pool — increased for wider topK
         private const val LAMBDA_PRIOR = 0.40f // Multiplicative Section Prior weight
     }
 
@@ -160,16 +160,36 @@ class VectorStore(private val chunkDao: ChunkDao) {
                 ).toFloat()
             } else 0f
 
-            val finalScore = baseScore * (1.0f + (LAMBDA_PRIOR * sectionAffinity))
+            val positionalBoost = if (intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Definitional) {
+                when (chunk.pageNumber) {
+                    1 -> 0.60f
+                    2 -> 0.40f
+                    3 -> 0.20f
+                    else -> 0.0f
+                }
+            } else 0.0f
+
+            val finalScore = baseScore * (1.0f + (LAMBDA_PRIOR * sectionAffinity) + positionalBoost)
             Pair(chunk, finalScore)
         }
 
+        // BUG 5 FIX: Use the MemoryGovernor's topK properly.
+        // Definitional queries need high precision → limit to 2.
+        // Summary/List/DomainSpecific queries need breadth → use full topK from governor.
+        // Procedural queries benefit from a moderate 4.
+        val effectiveTopK = when (intent) {
+            is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Definitional -> 2
+            is com.siddu.offlinedocai.ai.reformulation.QueryIntent.GlobalSummary -> topK.coerceAtLeast(3)
+            is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Procedural -> topK.coerceIn(3, 5)
+            else -> topK.coerceIn(3, 5) // DomainSpecific and others get full breadth
+        }
         val sortedResults = hybridScored
             .sortedByDescending { it.second }
-            .take(topK)
+            .distinctBy { it.first.pageNumber }
+            .take(effectiveTopK)
             .map { it.first }
 
-        return if (sortedResults.isNotEmpty()) sortedResults else allChunks.take(topK)
+        return if (sortedResults.isNotEmpty()) sortedResults else allChunks.take(effectiveTopK)
     }
 
     /**

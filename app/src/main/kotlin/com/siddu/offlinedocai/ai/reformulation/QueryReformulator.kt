@@ -81,8 +81,8 @@ object QueryReformulator {
             if (clean.startsWith(prefix)) {
                 val term = clean.removePrefix(prefix).trim().removePrefix("the").trim()
                 if (term.isNotBlank()) {
-                    val rewritten = "$term definition meaning concept overview introduction"
-                    logInfo("Classified Definitional: term='$term' -> '$rewritten'")
+                    logInfo("Classified Definitional: term='$term'")
+                    val rewritten = "$term definition"
                     return ReformulationResult(
                         intent = QueryIntent.Definitional(term, rewritten),
                         searchString = rewritten,
@@ -95,8 +95,8 @@ object QueryReformulator {
         if (clean.endsWith(" meaning") || clean.endsWith(" definition")) {
             val term = clean.substringBeforeLast(" ").trim()
             if (term.isNotBlank()) {
-                val rewritten = "$term definition meaning concept overview introduction"
-                logInfo("Classified Definitional (suffix): term='$term' -> '$rewritten'")
+                logInfo("Classified Definitional (suffix): term='$term'")
+                val rewritten = "$term definition"
                 return ReformulationResult(
                     intent = QueryIntent.Definitional(term, rewritten),
                     searchString = rewritten,
@@ -109,8 +109,8 @@ object QueryReformulator {
         val words = clean.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (words.size in 1..2 && !listOf("how", "why", "when", "where", "can", "is", "do", "what").any { clean.startsWith(it) }) {
             val term = clean
-            val rewritten = "$term definition meaning concept overview introduction"
-            logInfo("Classified Definitional (single noun): term='$term' -> '$rewritten'")
+            logInfo("Classified Definitional (single noun): term='$term'")
+            val rewritten = "$term definition"
             return ReformulationResult(
                 intent = QueryIntent.Definitional(term, rewritten),
                 searchString = rewritten,
@@ -127,8 +127,8 @@ object QueryReformulator {
         for (prefix in procPrefixes) {
             if (clean.startsWith(prefix)) {
                 val action = clean.removePrefix(prefix).trim()
-                val rewritten = "$action techniques methods steps procedure guide"
-                logInfo("Classified Procedural: action='$action' -> '$rewritten'")
+                logInfo("Classified Procedural: action='$action'")
+                val rewritten = "$action procedure guide"
                 return ReformulationResult(
                     intent = QueryIntent.Procedural(action, rewritten),
                     searchString = rewritten,

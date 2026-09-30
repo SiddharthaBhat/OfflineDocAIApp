@@ -78,7 +78,7 @@ object SelectiveContentReducer {
 
         return chunks.map { chunk ->
             val sentences = splitIntoSentences(chunk.text)
-            if (sentences.size <= 2) {
+            if (chunk.text.length < 80 || sentences.size <= 2) {
                 return@map CompressedChunk(chunk, chunk.text, 0f)
             }
 
@@ -131,11 +131,24 @@ object SelectiveContentReducer {
 
     /**
      * Recombines compressed chunks into a clean context prompt block with page attribution.
+     * Enforces a max context budget (default ~2400 chars) to prevent prompt bloat and keep mobile inference fast.
      */
-    fun formatCompressedContext(compressedChunks: List<CompressedChunk>): String {
-        return compressedChunks.joinToString("\n\n") { compressed ->
-            "[Page ${compressed.originalChunk.pageNumber}] ${compressed.compressedText}"
+    fun formatCompressedContext(compressedChunks: List<CompressedChunk>, maxChars: Int = 2400): String {
+        val sb = StringBuilder()
+        for (compressed in compressedChunks) {
+            val chunkFormatted = "[Page ${compressed.originalChunk.pageNumber}] ${compressed.compressedText}"
+            if (sb.isNotEmpty() && (sb.length + chunkFormatted.length + 2) > maxChars) {
+                val remainingBudget = maxChars - sb.length - 2
+                if (remainingBudget > 200) {
+                    val truncated = chunkFormatted.take(remainingBudget).substringBeforeLast('.') + "."
+                    sb.append("\n\n").append(truncated)
+                }
+                break
+            }
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append(chunkFormatted)
         }
+        return sb.toString()
     }
 
     private fun splitIntoSentences(text: String): List<String> {

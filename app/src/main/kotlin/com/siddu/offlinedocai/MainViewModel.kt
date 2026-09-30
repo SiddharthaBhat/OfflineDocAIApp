@@ -1,6 +1,7 @@
 package com.siddu.offlinedocai
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,7 +34,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         application,
         AppDatabase::class.java,
         "offline_docai.db"
-    ).fallbackToDestructiveMigration().build()
+    ).addMigrations(AppDatabase.MIGRATION_2_3)
+     .fallbackToDestructiveMigration()
+     .build()
 
     private val documentDao = database.documentDao()
     private val conversationDao = database.conversationDao()
@@ -53,6 +56,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val llmDownloader = ModelDownloader(application)
     val llmDownloadState: StateFlow<DownloadState> = llmDownloader.downloadState
+    val currentlyDownloadingModel = MutableStateFlow<String?>(null)
 
     val downloadedLlmModels = MutableStateFlow<List<File>>(emptyList())
     val selectedLlmModel = MutableStateFlow<File?>(null)
@@ -72,7 +76,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Load existing data from DB
         viewModelScope.launch {
-            documentDao.getAllDocuments().collect { _documents.value = it }
+            documentDao.getAllDocuments().collect { docs ->
+                _documents.value = docs
+                // Automatically recover from previous session crashes: mark orphaned PROCESSING docs as FAILED
+                docs.filter { it.status == "PROCESSING" }.forEach { stuck ->
+                    documentDao.update(stuck.copy(status = "FAILED"))
+                }
+            }
         }
         viewModelScope.launch {
             conversationDao.getAllConversations().collect { _conversations.value = it }
@@ -90,19 +100,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val llmFiles = llmDir.listFiles()?.filter { it.extension.equals("gguf", ignoreCase = true) } ?: emptyList()
         downloadedLlmModels.value = llmFiles
         isLlmModelDownloaded.value = llmFiles.isNotEmpty()
-        if (selectedLlmModel.value == null || !selectedLlmModel.value!!.exists()) {
-            selectedLlmModel.value = llmFiles.firstOrNull()
-        }
+
+        val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
+        val savedModelName = prefs.getString("selected_llm_model", null)
+        val preferred = llmFiles.firstOrNull { it.name == savedModelName } ?: llmFiles.firstOrNull()
+        selectedLlmModel.value = preferred
     }
 
     fun selectLlmModel(file: File) {
         selectedLlmModel.value = file
+        val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
+        prefs.edit().putString("selected_llm_model", file.name).apply()
     }
 
     fun deleteLlmModel(file: File) {
         viewModelScope.launch {
             if (file.exists()) {
                 file.delete()
+            }
+            val prefs = getApplication<Application>().getSharedPreferences("docai_models", Context.MODE_PRIVATE)
+            if (prefs.getString("selected_llm_model", null) == file.name) {
+                prefs.edit().remove("selected_llm_model").apply()
             }
             checkModels()
         }
@@ -126,14 +144,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadLlmModel(urlStr: String, fileName: String) {
+        currentlyDownloadingModel.value = fileName
         val destFile = File(getApplication<Application>().filesDir, "models/llm/$fileName")
         viewModelScope.launch {
             llmDownloader.downloadModel(urlStr, destFile)
             checkModels()
+            if (selectedLlmModel.value == null && destFile.exists()) {
+                selectLlmModel(destFile)
+            }
         }
     }
 
     fun resetLlmDownloadState() {
+        currentlyDownloadingModel.value = null
         llmDownloader.resetState()
     }
 

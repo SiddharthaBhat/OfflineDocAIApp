@@ -28,27 +28,58 @@ class ModelDownloader(private val context: Context) {
             // Ensure parent directories exist
             destinationFile.parentFile?.mkdirs()
             
-            val url = URL(urlStr)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            connection.connect()
+            var currentUrl = urlStr
+            var connection: HttpURLConnection? = null
+            var redirects = 0
+            val maxRedirects = 6
 
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                _downloadState.value = DownloadState.Error("Server returned HTTP ${connection.responseCode}")
+            while (redirects < maxRedirects) {
+                val url = URL(currentUrl)
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 30000
+                    readTimeout = 30000
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                }
+                connection.connect()
+
+                val code = connection.responseCode
+                if (code == HttpURLConnection.HTTP_MOVED_PERM ||
+                    code == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    code == HttpURLConnection.HTTP_SEE_OTHER ||
+                    code == 307 || code == 308) {
+                    val location = connection.getHeaderField("Location")
+                    if (!location.isNullOrEmpty()) {
+                        currentUrl = location
+                        redirects++
+                        connection.disconnect()
+                        continue
+                    }
+                }
+                break
+            }
+
+            val finalConn = connection ?: throw IllegalStateException("Failed to establish connection")
+            if (finalConn.responseCode != HttpURLConnection.HTTP_OK) {
+                _downloadState.value = DownloadState.Error("Server returned HTTP ${finalConn.responseCode}")
                 return@withContext
             }
 
-            val fileLength = connection.contentLengthLong
-            connection.inputStream.use { input ->
+            val fileLength = finalConn.contentLengthLong
+            finalConn.inputStream.use { input ->
                 FileOutputStream(destinationFile).use { output ->
-                    val data = ByteArray(8192)
+                    val data = ByteArray(65536) // 64KB buffer for high-throughput 1GB+ downloads
                     var total: Long = 0
                     var count: Int
+                    var lastReportedPercent = -1
                     while (input.read(data).also { count = it } != -1) {
                         total += count
                         if (fileLength > 0) {
                             val percent = ((total * 100) / fileLength).toInt()
-                            _downloadState.value = DownloadState.Progress(total, fileLength, percent)
+                            if (percent != lastReportedPercent) {
+                                lastReportedPercent = percent
+                                _downloadState.value = DownloadState.Progress(total, fileLength, percent)
+                            }
                         }
                         output.write(data, 0, count)
                     }

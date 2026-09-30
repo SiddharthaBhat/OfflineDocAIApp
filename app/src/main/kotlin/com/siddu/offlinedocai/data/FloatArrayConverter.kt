@@ -4,7 +4,7 @@ import androidx.room.TypeConverter
 import java.nio.ByteBuffer
 
 class FloatArrayConverter {
-    gitcompanion object {
+    companion object {
         @TypeConverter
         @JvmStatic
         fun fromFloatArray(value: FloatArray?): ByteArray? {

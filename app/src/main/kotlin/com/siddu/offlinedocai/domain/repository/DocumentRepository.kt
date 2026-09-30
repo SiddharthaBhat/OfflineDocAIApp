@@ -61,6 +61,7 @@ class DocumentRepository(
     /** Public API to start an import */
     fun importDocument(uri: Uri) {
         CoroutineScope(Dispatchers.IO).launch {
+            var docId: Long = 0L
             try {
                 _importState.value = ImportState.Reading
                 
@@ -87,23 +88,21 @@ class DocumentRepository(
                     addedAt = System.currentTimeMillis(),
                     status = "PROCESSING"
                 )
-                val docId = documentDao.insert(document)
+                docId = documentDao.insert(document)
 
                 _importState.value = ImportState.Chunking
                 val allChunks = mutableListOf<ChunkEntity>()
-                result.pages.forEachIndexed { pageIdx, pageText ->
-                    val chunks = TextChunker.chunkText(pageText.text, pageNumber = pageIdx + 1)
-                    chunks.forEach { chunk ->
-                        allChunks.add(
-                            ChunkEntity(
-                                id = 0,
-                                documentId = docId,
-                                pageNumber = chunk.pageNumber,
-                                text = chunk.text,
-                                embedding = null // placeholder, will be filled after embedding
-                            )
+                val docChunks = TextChunker.chunkDocument(result.pages, targetWords = 300, overlapWords = 60)
+                docChunks.forEach { chunk ->
+                    allChunks.add(
+                        ChunkEntity(
+                            id = 0,
+                            documentId = docId,
+                            pageNumber = chunk.pageNumber,
+                            text = chunk.text,
+                            embedding = null // placeholder, will be filled after embedding
                         )
-                    }
+                    )
                 }
 
                 _importState.value = ImportState.Embedding
@@ -138,6 +137,14 @@ class DocumentRepository(
                 _importState.value = ImportState.Completed
             } catch (e: java.lang.Exception) {
                 Log.e(TAG, "Import failed", e)
+                try {
+                    if (docId > 0L) {
+                        documentDao.getById(docId)?.let {
+                            documentDao.update(it.copy(status = "FAILED"))
+                        }
+                    }
+                } catch (ignored: Throwable) {
+                }
                 _importState.value = ImportState.Error(e.message ?: "Unknown error")
             }
         }

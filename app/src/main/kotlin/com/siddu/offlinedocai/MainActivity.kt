@@ -36,7 +36,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -57,6 +56,10 @@ import com.siddu.offlinedocai.data.entities.MessageEntity
 import com.siddu.offlinedocai.domain.repository.DocumentRepository
 import com.siddu.offlinedocai.domain.repository.ChatRepository
 import com.siddu.offlinedocai.domain.repository.DownloadState
+import com.siddu.offlinedocai.ai.llm.AvailableLlmModel
+import com.siddu.offlinedocai.ai.llm.AvailableLlmModels
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -67,7 +70,27 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {}
         setContent { OfflineDocAIApp() }
     }
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
+        return try {
+            super.dispatchGenericMotionEvent(ev)
+        } catch (e: Exception) {
+            // Catches AndroidComposeView hover event bug (Google Issue #314269723)
+            android.util.Log.w("MainActivity", "Intercepted generic motion event exception: ${e.message}")
+            true
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        return try {
+            super.dispatchTouchEvent(ev)
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Intercepted touch event exception: ${e.message}")
+            true
+        }
+    }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,6 +154,7 @@ fun HomeScreen(viewModel: MainViewModel, navController: NavHostController) {
     val conversations by viewModel.conversations.collectAsState()
     val isEmbedDownloaded by viewModel.isEmbeddingModelDownloaded.collectAsState()
     val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     // Trigger check on layout load
     LaunchedEffect(Unit) {
@@ -185,13 +209,156 @@ fun HomeScreen(viewModel: MainViewModel, navController: NavHostController) {
         Spacer(modifier = Modifier.height(24.dp))
 
         Button(
-            onClick = { navController.navigate("newChat") },
+            onClick = {
+                coroutineScope.launch {
+                    val convId = viewModel.startConversation(
+                        title = "General AI Chat",
+                        documentIds = emptyList()
+                    )
+                    navController.navigate("chat/$convId")
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
-            enabled = isLlmDownloaded && isEmbedDownloaded
+            enabled = isLlmDownloaded
         ) {
             Icon(Icons.Default.Chat, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Start New Conversation")
+            Text("🤖 Start General AI Chat (No Document)")
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        OutlinedButton(
+            onClick = { navController.navigate("newChat") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isLlmDownloaded
+        ) {
+            Icon(Icons.Default.Description, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("📄 Chat with a Document (RAG)")
+        }
+    }
+}
+
+@Composable
+fun ModelOptionCard(
+    model: AvailableLlmModel,
+    isDownloaded: Boolean,
+    isSelected: Boolean,
+    isDownloading: Boolean,
+    downloadProgress: DownloadState.Progress?,
+    onDownload: () -> Unit,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                isSelected -> MaterialTheme.colorScheme.primaryContainer
+                isDownloaded -> MaterialTheme.colorScheme.surfaceVariant
+                else -> MaterialTheme.colorScheme.surface
+            }
+        ),
+        shape = RoundedCornerShape(12.dp),
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isDownloaded) Modifier.clickable { onSelect() } else Modifier
+            )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = model.name,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${model.parameterSize} params • Size: ${model.downloadSize}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when {
+                        isSelected -> MaterialTheme.colorScheme.primary
+                        isDownloaded -> MaterialTheme.colorScheme.secondaryContainer
+                        else -> MaterialTheme.colorScheme.tertiaryContainer
+                    }
+                ) {
+                    Text(
+                        text = when {
+                            isSelected -> "Active"
+                            isDownloaded -> "Ready"
+                            else -> model.badge
+                        },
+                        color = when {
+                            isSelected -> MaterialTheme.colorScheme.onPrimary
+                            isDownloaded -> MaterialTheme.colorScheme.onSecondaryContainer
+                            else -> MaterialTheme.colorScheme.onTertiaryContainer
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = model.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "⚡ Recommended: ${model.ramRequirement}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+
+            if (isDownloading && downloadProgress != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    progress = { downloadProgress.percent / 100f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Downloading: ${downloadProgress.percent}% (${downloadProgress.bytesDownloaded / 1024 / 1024} MB / ${downloadProgress.totalBytes / 1024 / 1024} MB)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else if (!isDownloaded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onDownload,
+                    enabled = !isDownloading,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Download ${model.downloadSize}")
+                }
+            } else if (!isSelected) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Tap to switch to this model for chat",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
     }
 }
@@ -202,6 +369,9 @@ fun ModelDownloadBanner(viewModel: MainViewModel) {
     val llmDownloadState by viewModel.llmDownloadState.collectAsState()
     val isEmbedDownloaded by viewModel.isEmbeddingModelDownloaded.collectAsState()
     val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
+    val currentlyDownloading by viewModel.currentlyDownloadingModel.collectAsState()
+    val downloadedLlmModels by viewModel.downloadedLlmModels.collectAsState()
+    val selectedLlmModel by viewModel.selectedLlmModel.collectAsState()
 
     Card(
         colors = CardDefaults.cardColors(
@@ -252,35 +422,36 @@ fun ModelDownloadBanner(viewModel: MainViewModel) {
 
                 when (llmDownloadState) {
                     is DownloadState.Idle -> {
-                        Text("Select a model to download below:")
+                        Text("Choose an offline model to download:", style = MaterialTheme.typography.bodySmall)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                viewModel.downloadLlmModel(
-                                    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-                                    "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AvailableLlmModels.list.forEach { model ->
+                                val isDownloaded = downloadedLlmModels.any { it.name == model.fileName }
+                                val isSelected = selectedLlmModel?.name == model.fileName
+                                ModelOptionCard(
+                                    model = model,
+                                    isDownloaded = isDownloaded,
+                                    isSelected = isSelected,
+                                    isDownloading = false,
+                                    downloadProgress = null,
+                                    onDownload = {
+                                        viewModel.downloadLlmModel(model.downloadUrl, model.fileName)
+                                    },
+                                    onSelect = {
+                                        val file = downloadedLlmModels.firstOrNull { it.name == model.fileName }
+                                        if (file != null) viewModel.selectLlmModel(file)
+                                    }
                                 )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Download Qwen 2.5 0.5B (390 MB)")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                viewModel.downloadLlmModel(
-                                    "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-                                    "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Download Llama 3.2 1B (700 MB)")
+                            }
                         }
                     }
                     is DownloadState.Progress -> {
                         val progress = llmDownloadState as DownloadState.Progress
+                        val modelInfo = AvailableLlmModels.list.firstOrNull { it.fileName == currentlyDownloading }
+                        val displayName = modelInfo?.name ?: currentlyDownloading ?: "Local Model"
                         Column {
+                            Text("Downloading $displayName...", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                            Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
                                 progress = { progress.percent / 100f },
                                 modifier = Modifier.fillMaxWidth()
@@ -367,9 +538,15 @@ fun DocumentsScreen(viewModel: MainViewModel, navController: NavHostController) 
                                     Text(doc.name, fontWeight = FontWeight.SemiBold)
                                     Spacer(modifier = Modifier.height(4.dp))
                                     val isReady = doc.status == "COMPLETED"
-                                    val statusColor = if (isReady) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                                    val isFailed = doc.status == "FAILED"
+                                    val statusColor = if (isReady) Color(0xFF4CAF50) else if (isFailed) Color(0xFFE53935) else Color(0xFFFF9800)
+                                    val statusText = when (doc.status) {
+                                        "COMPLETED" -> "Ready for RAG"
+                                        "FAILED" -> "Failed / Incomplete • Delete & re-import"
+                                        else -> "Processing..."
+                                    }
                                     Text(
-                                        text = "${doc.pageCount} pages • ${if (isReady) "Ready for RAG" else "Processing..."}",
+                                        text = "${doc.pageCount} pages • $statusText",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = statusColor
                                     )
@@ -491,10 +668,11 @@ fun ChatsScreen(viewModel: MainViewModel, navController: NavHostController) {
     val conversations by viewModel.conversations.collectAsState()
     val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
     val isEmbedDownloaded by viewModel.isEmbeddingModelDownloaded.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
         floatingActionButton = {
-            if (isLlmDownloaded && isEmbedDownloaded) {
+            if (isLlmDownloaded) {
                 FloatingActionButton(onClick = { navController.navigate("newChat") }) {
                     Icon(Icons.Default.Add, contentDescription = "New Chat")
                 }
@@ -510,13 +688,26 @@ fun ChatsScreen(viewModel: MainViewModel, navController: NavHostController) {
             Text("Conversations", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (!isLlmDownloaded || !isEmbedDownloaded) {
+            if (!isLlmDownloaded) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                    Text("Please download missing models on the Home screen to start conversations.", modifier = Modifier.padding(16.dp))
+                    Text("Please download a language model on the Home screen to start chatting.", modifier = Modifier.padding(16.dp))
                 }
             } else if (conversations.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No chats active yet.", color = Color.Gray)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No chats active yet.", color = Color.Gray)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                val convId = viewModel.startConversation("General AI Chat", emptyList())
+                                navController.navigate("chat/$convId")
+                            }
+                        }) {
+                            Icon(Icons.Default.Chat, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Start a General AI Chat")
+                        }
+                    }
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -537,11 +728,34 @@ fun ChatsScreen(viewModel: MainViewModel, navController: NavHostController) {
                                     modifier = Modifier.weight(1f),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Chat, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    Icon(
+                                        imageVector = if (chat.documentId == null) Icons.Default.Chat else Icons.Default.Description,
+                                        contentDescription = null,
+                                        tint = if (chat.documentId == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                                    )
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text(chat.title, fontWeight = FontWeight.SemiBold)
-                                        Text("Created at: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(chat.createdAt))}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Surface(
+                                                color = if (chat.documentId == null) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (chat.documentId == null) "🤖 Pure AI" else "📄 RAG Doc",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    color = if (chat.documentId == null) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                "Created at: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(chat.createdAt))}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color.Gray
+                                            )
+                                        }
                                     }
                                 }
                                 IconButton(onClick = { viewModel.deleteConversation(chat.id) }) {
@@ -560,9 +774,12 @@ fun ChatsScreen(viewModel: MainViewModel, navController: NavHostController) {
 @Composable
 fun NewChatScreen(viewModel: MainViewModel, navController: NavHostController) {
     val documents by viewModel.documents.collectAsState()
+    var selectedTab by remember { mutableIntStateOf(0) } // 0 = General AI, 1 = Document RAG
     var title by remember { mutableStateOf("") }
     val selectedDocIds = remember { mutableStateListOf<Long>() }
     val coroutineScope = rememberCoroutineScope()
+    val isLlmDownloaded by viewModel.isLlmModelDownloaded.collectAsState()
+    val selectedModel by viewModel.selectedLlmModel.collectAsState()
 
     Scaffold(
         topBar = {
@@ -582,65 +799,164 @@ fun NewChatScreen(viewModel: MainViewModel, navController: NavHostController) {
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("Chat Title") },
-                placeholder = { Text("e.g. Finance Report Q2") },
-                modifier = Modifier.fillMaxWidth()
-            )
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("🤖 General AI Chat") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("📄 Document RAG") }
+                )
+            }
 
-            Spacer(modifier = Modifier.height(24.dp))
-            Text("Select Documents to Reference:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            if (documents.isEmpty()) {
-                Text("No documents available. Import some first.", color = Color.Gray)
+            if (selectedTab == 0) {
+                // General AI Chat Mode (No document)
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Direct AI Model Chat",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Chat directly with the installed model (${selectedModel?.name ?: "Qwen 2.5"}). No document is referenced. You can ask general questions, request explanations, coding help, or brainstorm freely!",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Chat Title (Optional)") },
+                    placeholder = { Text("e.g. General AI Chat") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Button(
+                    onClick = {
+                        val finalTitle = title.ifBlank { "General AI Chat" }
+                        coroutineScope.launch {
+                            val convId = viewModel.startConversation(finalTitle, emptyList())
+                            navController.navigate("chat/$convId") {
+                                popUpTo("chats") { inclusive = false }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isLlmDownloaded
+                ) {
+                    Icon(Icons.Default.Chat, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Start General AI Chat")
+                }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(documents) { doc ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (selectedDocIds.contains(doc.id)) {
-                                        selectedDocIds.remove(doc.id)
-                                    } else {
-                                        selectedDocIds.add(doc.id)
+                // Document RAG Chat Mode
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Chat Title (Optional)") },
+                    placeholder = { Text("e.g. Document Discussion") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Select Document to Reference:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val completedDocs = documents.filter { it.status == "COMPLETED" }
+                if (completedDocs.isEmpty()) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("No indexed documents found. Import documents in the 'Documents' tab first.", color = Color.Gray)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(onClick = { navController.navigate("documents") }) {
+                                Text("Go to Documents")
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(completedDocs) { doc ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (selectedDocIds.contains(doc.id)) {
+                                            selectedDocIds.remove(doc.id)
+                                        } else {
+                                            selectedDocIds.clear()
+                                            selectedDocIds.add(doc.id)
+                                            if (title.isBlank()) {
+                                                title = "${doc.name.substringBeforeLast(".")} Chat"
+                                            }
+                                        }
                                     }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = selectedDocIds.contains(doc.id),
+                                    onCheckedChange = { isChecked ->
+                                        if (isChecked == true) {
+                                            selectedDocIds.clear()
+                                            selectedDocIds.add(doc.id)
+                                            if (title.isBlank()) {
+                                                title = "${doc.name.substringBeforeLast(".")} Chat"
+                                            }
+                                        } else {
+                                            selectedDocIds.remove(doc.id)
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(doc.name, fontWeight = FontWeight.Medium)
+                                    Text("${doc.pageCount} pages", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                 }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = selectedDocIds.contains(doc.id),
-                                onCheckedChange = {
-                                    if (it == true) selectedDocIds.add(doc.id) else selectedDocIds.remove(doc.id)
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(doc.name)
+                            }
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
-                onClick = {
-                    val finalTitle = title.ifBlank { "New Chat" }
-                    coroutineScope.launch {
-                        val convId = viewModel.startConversation(finalTitle, selectedDocIds.toList())
-                        navController.navigate("chat/$convId") {
-                            popUpTo("chats") { inclusive = false }
+                Button(
+                    onClick = {
+                        val finalTitle = title.ifBlank { "Document Chat" }
+                        coroutineScope.launch {
+                            val convId = viewModel.startConversation(finalTitle, selectedDocIds.toList())
+                            navController.navigate("chat/$convId") {
+                                popUpTo("chats") { inclusive = false }
+                            }
                         }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = title.isNotBlank()
-            ) {
-                Text("Create Conversation")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedDocIds.isNotEmpty()
+                ) {
+                    Icon(Icons.Default.Description, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Start Document RAG Chat")
+                }
             }
         }
     }
@@ -663,7 +979,16 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(chat?.title ?: "Chat") },
+                title = {
+                    Column {
+                        Text(chat?.title ?: "Chat", maxLines = 1)
+                        Text(
+                            text = if (linkedDocIds.isEmpty()) "🤖 General AI Chat (No Document)" else "📄 Document RAG Chat",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (linkedDocIds.isEmpty()) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -741,6 +1066,26 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                             modifier = Modifier.fillMaxWidth(0.85f)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
+                                if (!isUser && msg.thinkingDurationMs != null && msg.thinkingDurationMs > 0) {
+                                    val seconds = msg.thinkingDurationMs / 1000.0
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                        modifier = Modifier.padding(bottom = 6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "⚡ Thought for ${String.format(java.util.Locale.US, "%.1f", seconds)}s",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
                                 Text(msg.content)
                                 if (!msg.sources.isNullOrBlank()) {
                                     val chunksList = remember(msg.sources) {
@@ -761,7 +1106,7 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                                                 .background(if (isPressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
                                                 .clickable(
                                                     interactionSource = interactionSource,
-                                                    indication = rememberRipple(bounded = true)
+                                                    indication = ripple(bounded = true)
                                                 ) { expanded = !expanded }
                                                 .padding(vertical = 6.dp, horizontal = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -816,9 +1161,39 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                 }
 
                 if (chatState is ChatRepository.ChatState.Thinking) {
+                    val thinkingState = chatState as ChatRepository.ChatState.Thinking
                     item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.CenterStart) {
-                            Text("Assistant is thinking...", color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
+                        var elapsedSeconds by remember(thinkingState.startedAtMs) { mutableStateOf(0f) }
+                        LaunchedEffect(thinkingState.startedAtMs) {
+                            while (true) {
+                                elapsedSeconds = (System.currentTimeMillis() - thinkingState.startedAtMs) / 1000f
+                                kotlinx.coroutines.delay(100)
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Thinking (${String.format(java.util.Locale.US, "%.1f", elapsedSeconds)}s)...",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
@@ -843,7 +1218,9 @@ fun ChatScreen(convId: Long, viewModel: MainViewModel, navController: NavHostCon
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
-                    placeholder = { Text("Ask about document...") },
+                    placeholder = {
+                        Text(if (linkedDocIds.isEmpty()) "Ask the AI model anything..." else "Ask about document...")
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -1200,10 +1577,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val downloadedLlmModels by viewModel.downloadedLlmModels.collectAsState()
     val selectedLlmModel by viewModel.selectedLlmModel.collectAsState()
     val llmDownloadState by viewModel.llmDownloadState.collectAsState()
+    val currentlyDownloading by viewModel.currentlyDownloadingModel.collectAsState()
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(24.dp)
     ) {
         Text("Settings & Model Management", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -1217,18 +1597,21 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("all-MiniLM-L6-v2 (Embedding)")
-                Text(if (isEmbedDownloaded) "Ready" else "Downloading...", color = if (isEmbedDownloaded) Color(0xFF4CAF50) else Color(0xFFFF9800))
+                Column {
+                    Text("all-MiniLM-L6-v2 (Embedding)", fontWeight = FontWeight.SemiBold)
+                    Text("Vector embeddings for document search", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
+                Text(if (isEmbedDownloaded) "Ready" else "Downloading...", color = if (isEmbedDownloaded) Color(0xFF4CAF50) else Color(0xFFFF9800), fontWeight = FontWeight.Bold)
             }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-        Text("Downloaded Local Language Models (SLMs):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("Downloaded Models (Active & Installed):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(8.dp))
 
         if (downloadedLlmModels.isEmpty()) {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Text("No SLM models downloaded yet. Download one below.", modifier = Modifier.padding(16.dp), color = Color.Gray)
+                Text("No SLM models downloaded yet. Download one from the catalog below.", modifier = Modifier.padding(16.dp), color = Color.Gray)
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1250,12 +1633,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(file.name, fontWeight = FontWeight.Bold)
+                                Text(file.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = if (isSelected) "Active for Chat" else "Tap to Select",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                             }
                             IconButton(onClick = { viewModel.deleteLlmModel(file) }) {
@@ -1268,33 +1652,74 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-        Text("Download Additional Models:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(modifier = Modifier.height(8.dp))
+        Text("Model Catalog (Download Options):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text("Choose higher capacity models for better document comprehension & complex questions.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Spacer(modifier = Modifier.height(12.dp))
 
-        Button(
-            onClick = {
-                viewModel.downloadLlmModel(
-                    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-                    "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Download Qwen 2.5 0.5B (390 MB)")
+        if (llmDownloadState is DownloadState.Completed) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Model download complete! Initialized for chat.", color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold)
+                    Button(onClick = { viewModel.resetLlmDownloadState() }) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            onClick = {
-                viewModel.downloadLlmModel(
-                    "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-                    "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Download Llama 3.2 1B (700 MB)")
+        if (llmDownloadState is DownloadState.Error) {
+            val error = llmDownloadState as DownloadState.Error
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Error: ${error.message}", color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { viewModel.resetLlmDownloadState() }) {
+                        Text("Retry")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
         }
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            AvailableLlmModels.list.forEach { model ->
+                val isDownloaded = downloadedLlmModels.any { it.name == model.fileName }
+                val isSelected = selectedLlmModel?.name == model.fileName
+                val isDownloading = currentlyDownloading == model.fileName && llmDownloadState is DownloadState.Progress
+                val progress = if (isDownloading) llmDownloadState as DownloadState.Progress else null
+
+                ModelOptionCard(
+                    model = model,
+                    isDownloaded = isDownloaded,
+                    isSelected = isSelected,
+                    isDownloading = isDownloading,
+                    downloadProgress = progress,
+                    onDownload = {
+                        viewModel.downloadLlmModel(model.downloadUrl, model.fileName)
+                    },
+                    onSelect = {
+                        val file = downloadedLlmModels.firstOrNull { it.name == model.fileName }
+                        if (file != null) viewModel.selectLlmModel(file)
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }

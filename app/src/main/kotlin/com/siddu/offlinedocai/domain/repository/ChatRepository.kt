@@ -96,11 +96,12 @@ How may I help you today?
             )
         } else {
             val welcomeText = """
-👋 Hello! I am your local offline AI assistant. 
+🤖 **General AI Chat**
 
-How may I help you today?
+I am running directly on-device using your installed local AI model.
+Ask me anything — general questions, explanations, writing, coding, or brainstorming!
 
-*Note: This is a general LLM chat session. To query a specific document using RAG, start a new conversation and check the document checkbox to load it as reference.*
+*(To query a specific document instead, start a new chat and select the document you want to reference).*
 """.trimIndent()
             
             messageDao.insert(
@@ -119,8 +120,9 @@ How may I help you today?
 
     /** Process a single message sequentially with RAG/LLM and stream the response */
     suspend fun executeMessage(conversationId: Long, userText: String, relevantDocumentIds: List<Long>) = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
         try {
-            _chatState.value = ChatState.Thinking
+            _chatState.value = ChatState.Thinking(startTime)
             // Persist user message
             val userMsg = MessageEntity(
                 id = 0,
@@ -134,19 +136,22 @@ How may I help you today?
             // Clean and filter valid document IDs (greater than 0)
             val cleanDocIds = relevantDocumentIds.filter { it > 0 }
 
-            // Check for primary document profile
-            val primaryDoc = if (cleanDocIds.isNotEmpty()) db.documentDao().getById(cleanDocIds.first()) else null
-            val profile = primaryDoc?.profileJson?.let { com.siddu.offlinedocai.ai.profiler.DocumentProfiler.fromJson(it) }
+            val (answer, sourcesData) = if (cleanDocIds.isEmpty()) {
+                val normalSystemPrompt = "You are an intelligent, versatile, highly capable offline AI assistant. Answer any user question directly, clearly, comprehensively, and informatively across all domains including general knowledge, science, mathematics, coding, writing, analysis, reasoning, and practical problem-solving."
+                val response = llm.generate(userText, normalSystemPrompt)
+                Pair(response, null)
+            } else {
+                // Check for primary document profile
+                val primaryDoc = db.documentDao().getById(cleanDocIds.first())
+                val profile = primaryDoc?.profileJson?.let { com.siddu.offlinedocai.ai.profiler.DocumentProfiler.fromJson(it) }
 
-            // Run Intent Classification and Context-Aware Reformulation
-            val reformulation = com.siddu.offlinedocai.ai.reformulation.QueryReformulator.classifyAndRewrite(userText, profile)
+                // Run Intent Classification and Context-Aware Reformulation
+                val reformulation = com.siddu.offlinedocai.ai.reformulation.QueryReformulator.classifyAndRewrite(userText, profile)
 
-            val (prompt, sourcesData, directAnswer) = if (cleanDocIds.isEmpty()) {
-                Triple(buildNormalPrompt(userText), null, null)
-            } else if (reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.GlobalSummary && profile != null) {
-                // Global Summary Short-Circuit (0ms Vector Search)
-                val sectionsList = profile.sections.joinToString("\n") { "• **Pages ${it.pageStart}–${it.pageEnd}**: ${it.title}" }
-                val summaryAnswer = """
+                if (reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.GlobalSummary && profile != null) {
+                    // Global Summary Short-Circuit (0ms Vector Search)
+                    val sectionsList = profile.sections.joinToString("\n") { "• **Pages ${it.pageStart}–${it.pageEnd}**: ${it.title}" }
+                    val summaryAnswer = """
 📄 **Executive Summary: ${profile.title}**
 
 This document covers **${profile.domain}** across ${profile.pageCount} pages.
@@ -160,47 +165,48 @@ ${profile.coreGlossary.joinToString(", ")}
 ---
 *Tip: You can ask specific questions about any of the sections above, or request a specific page (e.g., "page ${profile.sections.firstOrNull()?.pageStart ?: 1}").*
 """.trimIndent()
-                Triple("", null, summaryAnswer)
-            } else {
-                // 1. Adaptive Memory Governance (Pocket RAG / HeRo)
-                val govConfig = com.siddu.offlinedocai.ai.governor.MemoryGovernor.getAdaptiveConfig()
+                    Pair(summaryAnswer, null)
+                } else {
+                    // 1. Adaptive Memory Governance (Pocket RAG / HeRo)
+                    val govConfig = com.siddu.offlinedocai.ai.governor.MemoryGovernor.getAdaptiveConfig()
 
-                // 2. Query Embedding on rewritten search string
-                val queryEmbedding = embeddingEngine.getEmbedding(reformulation.searchString)
+                    // 2. Query Embedding on rewritten search string
+                    val queryEmbedding = embeddingEngine.getEmbedding(reformulation.searchString)
 
-                // 3. Two-Stage Hybrid Retrieval with Section Prior
-                val rawChunks = vectorStore.retrieve(
-                    queryEmbedding = queryEmbedding,
-                    relevantDocumentIds = cleanDocIds,
-                    topK = govConfig.topK,
-                    query = reformulation.searchString,
-                    intent = reformulation.intent,
-                    profile = profile
-                )
+                    // 3. Two-Stage Hybrid Retrieval with Section Prior
+                    val rawChunks = vectorStore.retrieve(
+                        queryEmbedding = queryEmbedding,
+                        relevantDocumentIds = cleanDocIds,
+                        topK = govConfig.topK,
+                        query = reformulation.searchString,
+                        intent = reformulation.intent,
+                        profile = profile
+                    )
 
-                // 4. Selective Content Reduction (SCR / SCC)
-                val isDefinitional = reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Definitional
-                val compressedChunks = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.reduceChunks(
-                    chunks = rawChunks,
-                    query = userText,
-                    retentionRatio = if (isDefinitional) 0.85f else govConfig.scrRetentionRatio,
-                    isGenericQuery = isDefinitional
-                )
+                    // 4. Selective Content Reduction (SCR / SCC)
+                    val isDefinitional = reformulation.intent is com.siddu.offlinedocai.ai.reformulation.QueryIntent.Definitional
+                    val compressedChunks = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.reduceChunks(
+                        chunks = rawChunks,
+                        query = userText,
+                        retentionRatio = if (isDefinitional) 0.85f else govConfig.scrRetentionRatio,
+                        isGenericQuery = isDefinitional
+                    )
 
-                val contextText = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.formatCompressedContext(compressedChunks)
+                    val contextText = com.siddu.offlinedocai.ai.compression.SelectiveContentReducer.formatCompressedContext(compressedChunks)
 
-                // Format chunks as informative source blocks for UI dropdown
-                val sourcesJson = compressedChunks.joinToString("|||") {
-                    "Page ${it.originalChunk.pageNumber} [SCR -${(it.tokenReductionPercentage * 100).toInt()}%]: ${it.compressedText}"
+                    // BUG 7 FIX: Format chunks as clean source blocks without internal [SCR -XX%] metrics
+                    val sourcesJson = compressedChunks.joinToString("|||") {
+                        "Page ${it.originalChunk.pageNumber}: ${it.compressedText}"
+                    }
+
+                    // Build prompt
+                    val ragSystemPrompt = "You are an expert offline document AI assistant. Answer the user's question directly, clearly, and concisely using ONLY the provided document context. Cite relevant page numbers (e.g., [Page 2]). If the context does not contain the answer, state that clearly. Keep the explanation focused and natural."
+                    val ragPrompt = "Document Context:\n$contextText\n\nQuestion: $userText"
+                    val response = llm.generate(ragPrompt, ragSystemPrompt)
+                    Pair(response, sourcesJson)
                 }
-
-                // Build prompt
-                val p = buildPrompt(contextText, userText)
-                Triple(p, sourcesJson, null)
             }
-
-            // Generate full answer from GGUFLLM or direct answer
-            val answer = directAnswer ?: llm.generate(prompt)
+            val thinkingDurationMs = System.currentTimeMillis() - startTime
 
             // Insert empty assistant message to initialize streaming updates
             val assistantMsgId = messageDao.insert(
@@ -210,7 +216,8 @@ ${profile.coreGlossary.joinToString(", ")}
                     role = "assistant",
                     content = "",
                     timestamp = System.currentTimeMillis(),
-                    sources = sourcesData
+                    sources = sourcesData,
+                    thinkingDurationMs = thinkingDurationMs
                 )
             )
 
@@ -226,15 +233,31 @@ ${profile.coreGlossary.joinToString(", ")}
                         role = "assistant",
                         content = currentContent,
                         timestamp = System.currentTimeMillis(),
-                        sources = sourcesData
+                        sources = sourcesData,
+                        thinkingDurationMs = thinkingDurationMs
                     )
                 )
-                delay(40) // speed of stream
+                delay(30) // speed of stream
             }
 
             _chatState.value = ChatState.Idle
         } catch (e: Exception) {
             Log.e(TAG, "Chat generation failed", e)
+            val thinkingDurationMs = System.currentTimeMillis() - startTime
+            try {
+                messageDao.insert(
+                    MessageEntity(
+                        id = 0,
+                        conversationId = conversationId,
+                        role = "assistant",
+                        content = "⚠️ Unable to generate response: ${e.message ?: "Unknown error"}. Please check model status.",
+                        timestamp = System.currentTimeMillis(),
+                        thinkingDurationMs = thinkingDurationMs
+                    )
+                )
+            } catch (insertEx: Exception) {
+                Log.e(TAG, "Failed to persist error message", insertEx)
+            }
             _chatState.value = ChatState.Error(e.message ?: "Unknown error")
         }
     }
@@ -246,32 +269,9 @@ ${profile.coreGlossary.joinToString(", ")}
         }
     }
 
-    private fun buildNormalPrompt(question: String): String {
-        return """
-You are a helpful offline AI assistant. Answer the user's question directly.
-
-Question: $question
-
-Answer:
-""".trimIndent()
-    }
-
-    private fun buildPrompt(context: String, question: String): String {
-        return """
-You are an offline AI assistant. Use the following extracted document context to answer the user's question.
-
-Context:
-$context
-
-Question: $question
-
-Answer concisely, referencing the page numbers when appropriate.
-""".trimIndent()
-    }
-
     sealed class ChatState {
         object Idle : ChatState()
-        object Thinking : ChatState()
+        data class Thinking(val startedAtMs: Long = System.currentTimeMillis()) : ChatState()
         data class Error(val message: String) : ChatState()
     }
 }

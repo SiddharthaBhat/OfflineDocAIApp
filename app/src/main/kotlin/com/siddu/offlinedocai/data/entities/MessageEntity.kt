@@ -10,5 +10,6 @@ data class MessageEntity(
     val role: String, // "USER" or "AI"
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val sources: String? = null // JSON array of page numbers
+    val sources: String? = null, // JSON array of page numbers
+    val thinkingDurationMs: Long? = null
 )
